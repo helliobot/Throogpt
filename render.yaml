@@ -7,8 +7,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     autoDeploy: true
-    env:
-  - key: BOT_TOKEN
-    value: ${BOT_TOKEN}
-    - key: ANOTHER_VAR
+    envVars:
+      - key: BOT_TOKEN
+        value: ${BOT_TOKEN}
+      - key: ANOTHER_VAR
         value: "value_if_needed"
