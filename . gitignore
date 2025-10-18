@@ -1,0 +1,5 @@
+# Hide secrets and unnecessary files
+.env
+__pycache__/
+*.pyc
+*.log
