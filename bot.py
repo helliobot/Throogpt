@@ -4,10 +4,12 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Get token from .env or environment
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN not found! Please set it in .env file.")
+    raise ValueError("❌ BOT_TOKEN not found! Please set it in .env file or Render Environment Variables.")
 
 bot = TeleBot(BOT_TOKEN)
 
