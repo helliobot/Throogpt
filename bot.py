@@ -5,12 +5,9 @@ from dotenv import load_dotenv
 from collections import defaultdict
 from datetime import datetime, timedelta
 import threading
-import openai
 
 load_dotenv()
-TOKEN = os.getenv('BOT_TOKEN')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-openai.api_key = OPENAI_API_KEY
+TOKEN = os.getenv('TOKEN')  # सुनिश्चित करो कि .env में TOKEN सेट है
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -191,64 +188,6 @@ def moderation_penalties(message):
         delete_previous(bot, chat_id, message.message_id, context)
         threading.Thread(target=delete_after_delay, args=(bot, chat_id, sent_message.message_id)).start()
 
-# Anti-Spam with OpenAI
-@bot.message_handler(content_types=['text'])
-def anti_spam(message):
-    chat_id = str(message.chat.id)
-    context = defaultdict(dict)
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', 'antispam'))
-    antispam = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'sensitivity': 5, 'action': 'delete'}
-    if antispam['status'] == 'on' and message.text:
-        try:
-            response = openai.Completion.create(
-                model="text-davinci-003",
-                prompt=f"Detect if this message is spam or toxic (score 1-10, 1=safe, 10=highly spam/toxic): {message.text}",
-                temperature=0.5,
-                max_tokens=10
-            )
-            score = parse_number(response.choices[0].text.strip())
-            if score >= antispam['sensitivity']:
-                user_id = str(message.from_user.id)
-                username = message.from_user.username or str(user_id)
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                if antispam['action'] == 'delete':
-                    bot.delete_message(chat_id, message.message_id)
-                    sent_message = bot.reply_to(message, "Spam detected and deleted!")
-                    c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
-                              (chat_id, 'delete', user_id, "Spam detected (OpenAI score: {score})", timestamp))
-                elif antispam['action'] == 'warn':
-                    c.execute("INSERT OR REPLACE INTO warns (chat_id, user_id, warns, reason, timestamp) VALUES (?, ?, COALESCE((SELECT warns + 1 FROM warns WHERE chat_id=? AND user_id=?), 1), ?, ?)",
-                              (chat_id, user_id, chat_id, user_id, "Spam detected", timestamp))
-                    c.execute("SELECT warns FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id))
-                    warns = c.fetchone()[0]
-                    c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', 'warns'))
-                    warn_settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'on', 'limit': 3, 'action': 'ban'}
-                    sent_message = bot.reply_to(message, f"User @{username} warned ({warns}/{warn_settings['limit']}) for spam!")
-                    if warns >= warn_settings['limit']:
-                        if warn_settings['action'] == 'ban':
-                            bot.kick_chat_member(chat_id, user_id)
-                            sent_message = bot.reply_to(message, f"User @{username} banned for exceeding warn limit!")
-                        elif warn_settings['action'] == 'mute':
-                            bot.restrict_chat_member(chat_id, user_id, permissions=types.ChatPermissions(can_send_messages=False))
-                            sent_message = bot.reply_to(message, f"User @{username} muted for exceeding warn limit!")
-                        c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
-                                  (chat_id, warn_settings['action'], user_id, f"Exceeded warn limit ({warns})", timestamp))
-                    c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
-                              (chat_id, 'warn', user_id, "Spam detected", timestamp))
-                elif antispam['action'] == 'ban':
-                    bot.kick_chat_member(chat_id, user_id)
-                    sent_message = bot.reply_to(message, f"User @{username} banned for spam!")
-                    c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
-                              (chat_id, 'ban', user_id, "Spam detected (OpenAI score: {score})", timestamp))
-                conn.commit()
-                threading.Thread(target=delete_after_delay, args=(bot, chat_id, sent_message.message_id)).start()
-        except Exception as e:
-            sent_message = bot.reply_to(message, f"Anti-Spam Error: {str(e)}")
-            threading.Thread(target=delete_after_delay, args=(bot, chat_id, sent_message.message_id)).start()
-    conn.close()
-
 # DrWebBot File Scanning
 @bot.message_handler(content_types=['document', 'photo', 'video'])
 def file_scanner(message):
@@ -262,8 +201,7 @@ def file_scanner(message):
         try:
             forwarded = bot.forward_message('@DrWebBot', chat_id, message.message_id)
             sent_message = bot.reply_to(message, "File sent to @DrWebBot for scanning...")
-            # Placeholder: DrWebBot reply ko handle karne ke liye
-            # Tumhe DrWebBot ke response ka wait aur parse karna hoga
+            # Placeholder: DrWebBot reply को handle करने के लिए
             c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
                       (chat_id, 'scan', str(message.from_user.id), "File sent for scanning", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
             conn.commit()
@@ -305,7 +243,7 @@ def logs_command(message):
     threading.Thread(target=delete_after_delay, args=(bot, chat_id, sent_message.message_id)).start()
 
 # Other Moderation Settings
-@bot.message_handler(commands=['antispam_on', 'antispam_off', 'antispam_set', 'antinsfw_on', 'antinsfw_off', 'lock', 'unlock', 'captcha_on', 'captcha_off', 'captcha_set'])
+@bot.message_handler(commands=['antinsfw_on', 'antinsfw_off', 'lock', 'unlock', 'captcha_on', 'captcha_off', 'captcha_set'])
 def moderation_settings(message):
     chat_id = str(message.chat.id)
     context = defaultdict(dict)
@@ -318,21 +256,7 @@ def moderation_settings(message):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     try:
-        if command == 'antispam_on':
-            c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                      (chat_id, 'moderation', 'antispam', json.dumps({'status': 'on', 'sensitivity': 5, 'action': 'delete'})))
-            sent_message = bot.reply_to(message, "Anti-spam ON!")
-        elif command == 'antispam_off':
-            c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                      (chat_id, 'moderation', 'antispam', json.dumps({'status': 'off', 'sensitivity': 5, 'action': 'delete'})))
-            sent_message = bot.reply_to(message, "Anti-spam OFF!")
-        elif command == 'antispam_set':
-            sensitivity = parse_number(message.text.split()[1]) if len(message.text.split()) > 1 else 5
-            action = message.text.split()[2] if len(message.text.split()) > 2 and message.text.split()[2] in ['delete', 'warn', 'ban'] else 'delete'
-            c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                      (chat_id, 'moderation', 'antispam', json.dumps({'status': 'on', 'sensitivity': sensitivity, 'action': action})))
-            sent_message = bot.reply_to(message, f"Anti-spam set: Sensitivity {sensitivity}, Action {action}")
-        elif command == 'antinsfw_on':
+        if command == 'antinsfw_on':
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', 'antinsfw', json.dumps({'status': 'on', 'action': 'delete'})))
             sent_message = bot.reply_to(message, "Anti-NSFW scanning ON!")
@@ -519,32 +443,24 @@ def moderation_menu(call):
     if len(data) == 1:
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🚫 Anti-Spam", callback_data='moderation_antispam'),
             types.InlineKeyboardButton("🔍 Anti-NSFW", callback_data='moderation_antinsfw'),
-            types.InlineKeyboardButton("⚠️ Warns", callback_data='moderation_warns')
+            types.InlineKeyboardButton("⚠️ Warns", callback_data='moderation_warns'),
+            types.InlineKeyboardButton("👥 Actions", callback_data='moderation_actions')
         )
         markup.add(
-            types.InlineKeyboardButton("👥 Actions", callback_data='moderation_actions'),
             types.InlineKeyboardButton("🔒 Locks", callback_data='moderation_locks'),
-            types.InlineKeyboardButton("🛡️ CAPTCHA", callback_data='moderation_captcha')
+            types.InlineKeyboardButton("🛡️ CAPTCHA", callback_data='moderation_captcha'),
+            types.InlineKeyboardButton("📜 Logs", callback_data='moderation_logs')
         )
-        markup.add(
-            types.InlineKeyboardButton("📜 Logs", callback_data='moderation_logs'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='main')
-        )
+        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='main'))
         sent_message = bot.edit_message_text("Moderation Tools:", chat_id, call.message.message_id, reply_markup=markup)
     elif len(data) == 2:
         tool = data[1]
         c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', tool))
-        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'sensitivity': 5, 'type': 'math', 'time': 300}
+        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'type': 'math', 'time': 300}
         status = settings.get('status', 'off')
         buttons = [[types.InlineKeyboardButton(f"{'✅' if status == 'on' else '❌'} {'ON' if status == 'off' else 'OFF'}", callback_data=f'moderation_{tool}_toggle')]]
-        if tool == 'antispam' and status == 'on':
-            buttons.append([
-                types.InlineKeyboardButton("🔢 Sensitivity", callback_data=f'moderation_{tool}_sensitivity'),
-                types.InlineKeyboardButton("⚙️ Action", callback_data=f'moderation_{tool}_action')
-            ])
-        elif tool == 'antinsfw' and status == 'on':
+        if tool == 'antinsfw' and status == 'on':
             buttons.append([types.InlineKeyboardButton("⚙️ Action", callback_data=f'moderation_{tool}_action')])
         elif tool == 'warns' and status == 'on':
             buttons.append([
@@ -581,18 +497,12 @@ def moderation_menu(call):
     elif len(data) == 3:
         tool, action = data[1], data[2]
         c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', tool))
-        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'sensitivity': 5, 'type': 'math', 'time': 300}
+        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'type': 'math', 'time': 300}
         if action == 'toggle':
             settings['status'] = 'on' if settings['status'] == 'off' else 'off'
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', tool, json.dumps(settings)))
             sent_message = bot.edit_message_text(f"{tool.capitalize()} {'enabled' if settings['status'] == 'on' else 'disabled'}!", chat_id, call.message.message_id)
-        elif action == 'sensitivity':
-            context['awaiting_input'] = f'moderation_{tool}_sensitivity'
-            sent_message = bot.edit_message_text("Send sensitivity (1-10):", chat_id, call.message.message_id)
-            store_message_id(context, sent_message.message_id)
-            conn.close()
-            return
         elif action == 'setlimit':
             context['awaiting_input'] = f'moderation_{tool}_setlimit'
             sent_message = bot.edit_message_text("Send warn limit (e.g., 3):", chat_id, call.message.message_id)
@@ -676,7 +586,7 @@ def moderation_menu(call):
     elif len(data) == 4:
         tool, subaction, value = data[1], data[2], data[3]
         c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', tool))
-        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'sensitivity': 5, 'type': 'math', 'time': 300}
+        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'type': 'math', 'time': 300}
         if subaction == 'action':
             settings['action'] = value
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
@@ -710,7 +620,7 @@ def moderation_menu(call):
             markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_logs'))
             sent_message = bot.edit_message_text(f"Logs Page {page}:\n{log_text}", chat_id, call.message.message_id, reply_markup=markup)
         else:
-            sent_message = bot.edit_message_text(f"No logs on page {page}!", chat_id, call.message.message_id)
+            sent_message = bot.edit_message_text(f"No logs on page {page}!", Twain, call.message.message_id)
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_logs'))
             bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
@@ -734,13 +644,8 @@ def handle_input(message):
         feature, subfeature, action = parts[0], parts[1], parts[2]
         if feature == 'moderation':
             c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, feature, subfeature))
-            settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'sensitivity': 5, 'type': 'math', 'time': 300}
-            if action == 'sensitivity':
-                settings['sensitivity'] = parse_number(user_input)
-                sent_message = bot.send_message(chat_id, f"Sensitivity set to {user_input}")
-                c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                          (chat_id, feature, subfeature, json.dumps(settings)))
-            elif action == 'setlimit':
+            settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'type': 'math', 'time': 300}
+            if action == 'setlimit':
                 settings['limit'] = parse_number(user_input)
                 sent_message = bot.send_message(chat_id, f"Warn limit set to {user_input}")
                 c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
@@ -756,18 +661,18 @@ def handle_input(message):
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if action == 'ban':
                     bot.kick_chat_member(chat_id, user_id)
-                    sent_message = bot.send_message(chat_id, f"User {user_input} banned!")
+                    sent_message = bot.send_message(chat_id, f"User {user_id} banned!")
                     c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
                               (chat_id, 'ban', user_id, reason, timestamp))
                 elif action == 'mute':
                     bot.restrict_chat_member(chat_id, user_id, permissions=types.ChatPermissions(can_send_messages=False))
-                    sent_message = bot.send_message(chat_id, f"User {user_input} muted!")
+                    sent_message = bot.send_message(chat_id, f"User {user_id} muted!")
                     c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
                               (chat_id, 'mute', user_id, reason, timestamp))
                 elif action == 'kick':
                     bot.kick_chat_member(chat_id, user_id)
                     bot.unban_chat_member(chat_id, user_id)
-                    sent_message = bot.send_message(chat_id, f"User {user_input} kicked!")
+                    sent_message = bot.send_message(chat_id, f"User {user_id} kicked!")
                     c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
                               (chat_id, 'kick', user_id, reason, timestamp))
                 elif action in ['tempban', 'tempmute']:
