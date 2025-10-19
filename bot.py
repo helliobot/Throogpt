@@ -1,5 +1,4 @@
-  
-    from flask import Flask, request
+ from flask import Flask, request
 import telebot, os, sqlite3, json, time, random, re
 from telebot import types
 from dotenv import load_dotenv
@@ -10,16 +9,11 @@ TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Database
 conn = sqlite3.connect('data.db', check_same_thread=False)
-conn.execute('''CREATE TABLE IF NOT EXISTS settings 
-                (chat_id INT PRIMARY KEY, data TEXT)''')
-conn.execute('''CREATE TABLE IF NOT EXISTS permissions 
-                (chat_id INT, command TEXT, allowed TEXT, PRIMARY KEY (chat_id, command))''')
-conn.execute('''CREATE TABLE IF NOT EXISTS users 
-                (chat_id INT, user_id INT, warns INT DEFAULT 0, xp INT DEFAULT 0, PRIMARY KEY (chat_id, user_id))''')
-conn.execute('''CREATE TABLE IF NOT EXISTS captcha 
-                (chat_id INT, user_id INT, answer INT, message_id INT, PRIMARY KEY (chat_id, user_id))''')
+conn.execute('''CREATE TABLE IF NOT EXISTS settings (chat_id INT PRIMARY KEY, data TEXT)''')
+conn.execute('''CREATE TABLE IF NOT EXISTS permissions (chat_id INT, command TEXT, allowed TEXT, PRIMARY KEY (chat_id, command))''')
+conn.execute('''CREATE TABLE IF NOT EXISTS users (chat_id INT, user_id INT, warns INT DEFAULT 0, xp INT DEFAULT 0, PRIMARY KEY (chat_id, user_id))''')
+conn.execute('''CREATE TABLE IF NOT EXISTS captcha (chat_id INT, user_id INT, answer INT, message_id INT, PRIMARY KEY (chat_id, user_id))''')
 conn.commit()
 
 # Spam detection
