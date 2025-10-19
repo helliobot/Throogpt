@@ -1,3 +1,4 @@
 telebot
 flask
 python-dotenv
+openai
