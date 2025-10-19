@@ -1,4 +1,4 @@
- from flask import Flask, request
+from flask import Flask, request
 import telebot, os, sqlite3, json, time, random, re
 from telebot import types
 from dotenv import load_dotenv
