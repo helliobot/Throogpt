@@ -1,4 +1,4 @@
 telebot
 flask
 python-dotenv
-openai
+openai==1.30.0
