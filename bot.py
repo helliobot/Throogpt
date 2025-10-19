@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 import threading
 
 load_dotenv()
-TOKEN = os.getenv('TOKEN')  # सुनिश्चित करो कि .env में TOKEN सेट है
-bot = telebot.TeleBot(TOKEN)
+BOT_TOKEN = os.getenv('BOT_TOKEN')  # सुनिश्चित करो कि .env में BOT_TOKEN सेट है
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
 # SQLite Database Setup
@@ -699,7 +699,7 @@ def handle_input(message):
         store_message_id(context, sent_message.message_id)
 
 # Webhook
-@app.route(f'/{TOKEN}', methods=['POST'])
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_str = request.get_data().decode('utf-8')
@@ -714,6 +714,6 @@ def home():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://helliobot.onrender.com/{TOKEN}")
+    bot.set_webhook(url=f"https://helliobot.onrender.com/{BOT_TOKEN}")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
