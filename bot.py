@@ -4,10 +4,11 @@ from telebot import types
 from dotenv import load_dotenv
 
 load_dotenv()
-bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
+TOKEN = os.getenv('BOT_TOKEN')
+bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Simple Database
+# Database
 conn = sqlite3.connect('data.db', check_same_thread=False)
 conn.execute('CREATE TABLE IF NOT EXISTS settings (chat_id INT PRIMARY KEY, data TEXT)')
 conn.commit()
@@ -22,29 +23,31 @@ class Buttons:
         return markup
 
 @bot.message_handler(commands=['start', 'settings'])
-def start(m): bot.send_message(m.chat.id, "🤖 **BOT LIVE!**", reply_markup=Buttons.main())
+def start(m): 
+    bot.send_message(m.chat.id, "🤖 **RENDER BOT LIVE!** 🎉", reply_markup=Buttons.main())
 
 @bot.callback_query_handler(func=lambda c: True)
 def cb(c):
-    chat_id = c.message.chat.id
-    if c.data == 'main': bot.edit_message_text("🤖 MENU", chat_id, c.message.id, reply_markup=Buttons.main())
-    elif c.data == 'spam': bot.answer_callback_query(c.id, "🚫 AntiSpam ON!")
+    if c.data == 'spam': bot.answer_callback_query(c.id, "🚫 AntiSpam ON!")
     elif c.data == 'welcome': bot.answer_callback_query(c.id, "👋 Welcome ON!")
     elif c.data == 'ban': bot.answer_callback_query(c.id, "🔒 Ban Ready!")
     elif c.data == 'rules': bot.answer_callback_query(c.id, "📜 Rules Set!")
 
-@app.route('/')
-def home(): return "🤖 Bot Live!"
-
-@app.route('/webhook', methods=['POST'])
+# ✅ FIXED WEBHOOK ROUTE!
+@app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
-    json_str = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return ''
+    if request.headers.get('content-type') == 'application/json':
+        json_str = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_str)
+        bot.process_new_updates([update])
+        return '', 200
+    return 'OK', 200
+
+@app.route('/')
+def home(): return "🤖 Bot Live on Render!"
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url=os.getenv('WEBHOOK_URL'))
+    bot.set_webhook(url=f"https://helliobot.onrender.com/{TOKEN}")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
