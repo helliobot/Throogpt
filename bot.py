@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from collections import defaultdict
 from datetime import datetime, timedelta
 import threading
+import logging
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')  # सुनिश्चित करो कि .env में BOT_TOKEN सेट है
