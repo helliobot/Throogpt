@@ -50,7 +50,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS welcome 
                  (chat_id TEXT, welcome_msg TEXT, leave_msg TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS flood_settings 
-                 (chat_id TEXT, limit INTEGER, action TEXT)''')
+                 (chat_id TEXT, flood_limit INTEGER, action TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS broadcasts 
                  (chat_id TEXT, message TEXT, sent INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS blacklists 
