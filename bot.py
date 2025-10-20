@@ -382,28 +382,32 @@ def start(message):
     context = defaultdict(dict)
     chat_id = str(message.chat.id)
     user = message.from_user
-    logging.info(f"Start command received in chat_id: {chat_id}, user: {user.id}")
-    if message.chat.type != 'private':
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔧 Open Settings in Private", url=f"t.me/{bot.get_me().username}"))
-        sent_message = bot.reply_to(message, "Private mein settings kholo ya group mein commands use karo!", reply_markup=markup)
+    logging.info(f"Start command received in chat_id: {chat_id}, user: {user.id}, type: {message.chat.type}, text: {message.text}")
+    try:
+        logging.info(f"Bot username: {bot.get_me().username}")
+        if message.chat.type != 'private':
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔧 Open Settings in Private", url=f"t.me/{bot.get_me().username}"))
+            sent_message = bot.reply_to(message, "Private mein settings kholo ya group mein commands use karo!", reply_markup=markup)
+            logging.info(f"Group response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        else:
+            text = (f"👋 Hey {user.first_name}, welcome to UltimateBot!\n"
+                    "🧠 The smartest way to run and grow your Telegram groups!\n"
+                    "⚡️ Use commands in group or tweak settings here.\n"
+                    "Add me as admin in your group.")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("🔧 Settings Menu", callback_data='main'),
+                types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true")
+            )
+            sent_message = bot.reply_to(message, text, reply_markup=markup)
+            logging.info(f"Private response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
-        logging.info(f"Group response sent, message_id: {sent_message.message_id}")
-        return
-    text = (f"👋 Hey {user.first_name}, welcome to UltimateBot!\n"
-            "🧠 The smartest way to run and grow your Telegram groups!\n"
-            "⚡️ Use commands in group or tweak settings here.\n"
-            "Add me as admin in your group.")
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("🔧 Settings Menu", callback_data='main'),
-        types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true")
-    )
-    sent_message = bot.reply_to(message, text, reply_markup=markup)
-    delete_previous(bot, chat_id, message.message_id, context)
-    store_message_id(context, sent_message.message_id)
-    logging.info(f"Private response sent, message_id: {sent_message.message_id}")
+    except Exception as e:
+        logging.error(f"Error in start command: {str(e)}")
+        sent_message = bot.reply_to(message, f"Error: {str(e)}")
+        store_message_id(context, sent_message.message_id)    
 
 # Settings Menu
 @bot.callback_query_handler(func=lambda call: call.data == 'main')
