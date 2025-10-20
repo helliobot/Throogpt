@@ -4,10 +4,16 @@ from telebot import types
 from dotenv import load_dotenv
 from collections import defaultdict
 import logging
-logging.basicConfig(level=logging.INFO)
+from datetime import datetime, timedelta
+
+logging.basicConfig(
+    level=logging.INFO,
+    filename='bot.log',  # Logs file mein save honge
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
 
 load_dotenv()
-TOKEN = os.getenv('BOT_TOKEN')  # Ensure BOT_TOKEN is set in .env
+TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -83,6 +89,106 @@ def store_message_id(context, message_id):
     logging.info(f"Storing message_id: {message_id} in context")
     context['last_bot_message'] = message_id
 
+# Start Command with Reply Keyboard
+@bot.message_handler(commands=['start', 'Start'])
+def start(message):
+    context = defaultdict(dict)
+    context.clear()  # Clear context to avoid overwrite
+    chat_id = str(message.chat.id)
+    user = message.from_user
+    logging.info(f"Start command received in chat_id: {chat_id}, user: {user.id}, type: {message.chat.type}, text: {message.text}")
+    try:
+        if message.chat.type != 'private':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔧 Open Settings", url=f"t.me/{bot.get_me().username}"),
+                types.InlineKeyboardButton("📋 Commands List", callback_data='show_commands')
+            )
+            reply_markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            reply_markup.add(
+                types.KeyboardButton("🔒 Lock"),
+                types.KeyboardButton("🔓 Unlock"),
+                types.KeyboardButton("🛡️ CAPTCHA"),
+                types.KeyboardButton("📜 Logs")
+            )
+            sent_message = bot.reply_to(message, "Bot shuru! Quick actions ya settings use karo:", reply_markup=reply_markup)
+            bot.send_message(chat_id, "Ya commands select karo:", reply_markup=markup)
+            logging.info(f"Group response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        else:
+            text = (f"👋 Hey {user.first_name}, welcome to UltimateBot!\n"
+                    "🧠 The smartest way to run and grow your Telegram groups!\n"
+                    "⚡️ Use commands in group or tweak settings here.\n"
+                    "Add me as admin in your group.")
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔧 Settings Menu", callback_data='main'),
+                types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true"),
+                types.InlineKeyboardButton("📋 Commands List", callback_data='show_commands')
+            )
+            sent_message = bot.reply_to(message, text, reply_markup=markup)
+            logging.info(f"Private response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        delete_previous(bot, chat_id, message.message_id, context)
+        store_message_id(context, sent_message.message_id)
+    except Exception as e:
+        logging.error(f"Error in start command: {str(e)}")
+        sent_message = bot.reply_to(message, f"Error: {str(e)}")
+        store_message_id(context, sent_message.message_id)
+
+# Commands List
+@bot.callback_query_handler(func=lambda call: call.data == 'show_commands')
+def show_commands(call):
+    chat_id = str(call.message.chat.id)
+    context = defaultdict(dict)
+    commands_list = (
+        "📋 Available Commands:\n"
+        "/start - Start the bot\n"
+        "/lock - Lock content (links, media, etc.)\n"
+        "/unlock - Unlock content\n"
+        "/ban - Ban a user\n"
+        "/mute - Mute a user\n"
+        "/kick - Kick a user\n"
+        "/warn - Warn a user\n"
+        "/tempban - Temporary ban\n"
+        "/tempmute - Temporary mute\n"
+        "/unwarn - Remove a warn\n"
+        "/warns - Check warns\n"
+        "/logs - View moderation logs\n"
+        "/antinsfw_on - Enable NSFW scanning\n"
+        "/antinsfw_off - Disable NSFW scanning\n"
+        "/captcha_on - Enable CAPTCHA\n"
+        "/captcha_off - Disable CAPTCHA\n"
+        "/captcha_set - Set CAPTCHA type/time\n"
+        "/status - View current settings"
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='main' if call.message.chat.type == 'private' else 'group_menu'))
+    sent_message = bot.edit_message_text(commands_list, chat_id, call.message.message_id, reply_markup=markup)
+    store_message_id(context, sent_message.message_id)
+    logging.info(f"Commands list sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+
+# Group Menu
+@bot.callback_query_handler(func=lambda call: call.data == 'group_menu')
+def group_menu(call):
+    chat_id = str(call.message.chat.id)
+    context = defaultdict(dict)
+    if not is_creator(bot, chat_id, call.from_user.id):
+        sent_message = bot.edit_message_text("Sirf group creator access kar sakte hain!", chat_id, call.message.message_id)
+        store_message_id(context, sent_message.message_id)
+        logging.info(f"Access denied, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔒 Lock Content", callback_data='moderation_lock'),
+        types.InlineKeyboardButton("🔓 Unlock Content", callback_data='moderation_unlock'),
+        types.InlineKeyboardButton("🛡️ CAPTCHA Settings", callback_data='moderation_captcha'),
+        types.InlineKeyboardButton("🔍 Anti-NSFW", callback_data='moderation_antinsfw'),
+        types.InlineKeyboardButton("📜 View Logs", callback_data='moderation_logs')
+    )
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Commands", callback_data='show_commands'))
+    sent_message = bot.edit_message_text("Group Management Menu:", chat_id, call.message.message_id, reply_markup=markup)
+    store_message_id(context, sent_message.message_id)
+    logging.info(f"Group menu sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+
 # Moderation Penalties
 @bot.message_handler(commands=['ban', 'mute', 'kick', 'warn', 'tempban', 'tempmute', 'unwarn', 'warns'])
 def moderation_penalties(message):
@@ -99,11 +205,17 @@ def moderation_penalties(message):
         store_message_id(context, sent_message.message_id)
         return
     if not message.reply_to_message and message.text.split()[0][1:].lower() not in ['warns']:
-        sent_message = bot.reply_to(message, "User ke message pe reply karo!")
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        command = message.text.split()[0][1:].lower()
+        markup.add(
+            types.InlineKeyboardButton("🚫 Ban", callback_data=f"quick_{command}_confirm"),
+            types.InlineKeyboardButton("🔇 Mute", callback_data=f"quick_mute_confirm"),
+            types.InlineKeyboardButton("🦵 Kick", callback_data=f"quick_kick_confirm")
+        )
+        sent_message = bot.reply_to(message, "Select action for user:", reply_markup=markup)
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
         return
-
     command = message.text.split()[0][1:].lower()
     user_id = str(message.reply_to_message.from_user.id) if message.reply_to_message else None
     username = message.reply_to_message.from_user.username if message.reply_to_message else str(user_id)
@@ -174,7 +286,6 @@ def moderation_penalties(message):
             warns, reason = result if result else (0, "No warns")
             sent_message = bot.reply_to(message, f"User @{target_user} has {warns} warns. Last reason: {reason}")
         conn.commit()
-        conn.close()
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
     except Exception as e:
@@ -183,7 +294,53 @@ def moderation_penalties(message):
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
 
-# DrWebBot File Scanning
+# Quick Moderation Buttons
+@bot.callback_query_handler(func=lambda call: call.data.startswith('quick_'))
+def quick_moderation_action(call):
+    chat_id = str(call.message.chat.id)
+    context = defaultdict(dict)
+    if not is_creator(bot, chat_id, call.from_user.id):
+        sent_message = bot.edit_message_text("Sirf group creator use kar sakte hain!", chat_id, call.message.message_id)
+        store_message_id(context, sent_message.message_id)
+        logging.info(f"Access denied, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        return
+    action = call.data.split('_')[1]
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    try:
+        if call.message.reply_to_message:
+            user_id = str(call.message.reply_to_message.from_user.id)
+            username = call.message.reply_to_message.from_user.username or str(user_id)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if action == 'ban':
+                bot.kick_chat_member(chat_id, user_id)
+                sent_message = bot.edit_message_text(f"User @{username} banned!", chat_id, call.message.message_id)
+                c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
+                          (chat_id, 'ban', user_id, "Quick action", timestamp))
+            elif action == 'mute':
+                bot.restrict_chat_member(chat_id, user_id, permissions=types.ChatPermissions(can_send_messages=False))
+                sent_message = bot.edit_message_text(f"User @{username} muted!", chat_id, call.message.message_id)
+                c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
+                          (chat_id, 'mute', user_id, "Quick action", timestamp))
+            elif action == 'kick':
+                bot.kick_chat_member(chat_id, user_id)
+                bot.unban_chat_member(chat_id, user_id)
+                sent_message = bot.edit_message_text(f"User @{username} kicked!", chat_id, call.message.message_id)
+                c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
+                          (chat_id, 'kick', user_id, "Quick action", timestamp))
+            conn.commit()
+            store_message_id(context, sent_message.message_id)
+            logging.info(f"Quick {action} applied, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+        else:
+            sent_message = bot.edit_message_text("No user selected! Reply to a message.", chat_id, call.message.message_id)
+            store_message_id(context, sent_message.message_id)
+    except Exception as e:
+        sent_message = bot.edit_message_text(f"Error: {str(e)}", chat_id, call.message.message_id)
+        store_message_id(context, sent_message.message_id)
+        logging.error(f"Error in quick {action}: {str(e)}")
+    conn.close()
+
+# File Scanning
 @bot.message_handler(content_types=['document', 'photo', 'video'])
 def file_scanner(message):
     chat_id = str(message.chat.id)
@@ -230,13 +387,14 @@ def logs_command(message):
             types.InlineKeyboardButton("◀️ Previous", callback_data=f'moderation_logs_view_prev_{page}'),
             types.InlineKeyboardButton("Next ▶️", callback_data=f'moderation_logs_view_next_{page}')
         )
+        markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
         sent_message = bot.reply_to(message, f"Logs Page {page}:\n{log_text}", reply_markup=markup)
     else:
         sent_message = bot.reply_to(message, f"No logs on page {page}!")
     delete_previous(bot, chat_id, message.message_id, context)
     store_message_id(context, sent_message.message_id)
 
-# Other Moderation Settings
+# Moderation Settings with Buttons
 @bot.message_handler(commands=['antinsfw_on', 'antinsfw_off', 'lock', 'unlock', 'captcha_on', 'captcha_off', 'captcha_set'])
 def moderation_settings(message):
     chat_id = str(message.chat.id)
@@ -245,6 +403,7 @@ def moderation_settings(message):
         sent_message = bot.reply_to(message, "Group mein creator ke roop mein use karo!")
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
+        logging.info(f"Access denied, chat_id: {chat_id}, message_id: {sent_message.message_id}")
         return
     command = message.text.split()[0][1:].lower()
     conn = sqlite3.connect('bot.db')
@@ -253,56 +412,67 @@ def moderation_settings(message):
         if command == 'antinsfw_on':
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', 'antinsfw', json.dumps({'status': 'on', 'action': 'delete'})))
-            sent_message = bot.reply_to(message, "Anti-NSFW scanning ON!")
+            sent_message = bot.reply_to(message, "🔍 Anti-NSFW scanning ON!")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         elif command == 'antinsfw_off':
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', 'antinsfw', json.dumps({'status': 'off', 'action': 'delete'})))
-            sent_message = bot.reply_to(message, "Anti-NSFW scanning OFF!")
-        elif command == 'lock':
-            lock_type = message.text.split()[1] if len(message.text.split()) > 1 else None
-            if lock_type in ['links', 'media', 'stickers', 'forwards']:
-                c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                          (chat_id, 'moderation', f'lock_{lock_type}', json.dumps({'status': 'on'})))
-                sent_message = bot.reply_to(message, f"{lock_type.capitalize()} locked!")
-            else:
-                sent_message = bot.reply_to(message, "Use: /lock [links/media/stickers/forwards]")
-        elif command == 'unlock':
-            lock_type = message.text.split()[1] if len(message.text.split()) > 1 else None
-            if lock_type in ['links', 'media', 'stickers', 'forwards']:
-                c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                          (chat_id, 'moderation', f'lock_{lock_type}', json.dumps({'status': 'off'})))
-                sent_message = bot.reply_to(message, f"{lock_type.capitalize()} unlocked!")
-            else:
-                sent_message = bot.reply_to(message, "Use: /unlock [links/media/stickers/forwards]")
+            sent_message = bot.reply_to(message, "🔍 Anti-NSFW scanning OFF!")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
+        elif command == 'lock' or command == 'unlock':
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            buttons = [
+                ("🔗 Links", f"{command}_links"),
+                ("📸 Media", f"{command}_media"),
+                ("😀 Stickers", f"{command}_stickers"),
+                ("📤 Forwards", f"{command}_forwards")
+            ]
+            for text, data in buttons:
+                markup.add(types.InlineKeyboardButton(text, callback_data=f"moderation_{command}_{data}"))
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            sent_message = bot.reply_to(message, f"Select content to {command}:", reply_markup=markup)
         elif command == 'captcha_on':
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', 'captcha', json.dumps({'status': 'on', 'type': 'math', 'time': 300})))
-            sent_message = bot.reply_to(message, "CAPTCHA ON for new members!")
+            sent_message = bot.reply_to(message, "🛡️ CAPTCHA ON for new members!")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         elif command == 'captcha_off':
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', 'captcha', json.dumps({'status': 'off', 'type': 'math', 'time': 300})))
-            sent_message = bot.reply_to(message, "CAPTCHA OFF!")
+            sent_message = bot.reply_to(message, "🛡️ CAPTCHA OFF!")
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         elif command == 'captcha_set':
-            captcha_type = message.text.split()[1] if len(message.text.split()) > 1 and message.text.split()[1] in ['math', 'word'] else 'math'
-            time = parse_time(message.text.split()[2]) if len(message.text.split()) > 2 else 300
-            c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
-                      (chat_id, 'moderation', 'captcha', json.dumps({'status': 'on', 'type': captcha_type, 'time': time})))
-            sent_message = bot.reply_to(message, f"CAPTCHA set: Type {captcha_type}, Time {time}s")
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("📝 Math CAPTCHA", callback_data='moderation_captcha_type_math_back'),
+                types.InlineKeyboardButton("🔤 Word CAPTCHA", callback_data='moderation_captcha_type_word_back')
+            )
+            markup.add(types.InlineKeyboardButton("⏰ Set Time", callback_data='moderation_captcha_time_back'))
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            sent_message = bot.reply_to(message, "Select CAPTCHA settings:", reply_markup=markup)
         conn.commit()
-        conn.close()
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
+        logging.info(f"{command} menu sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
     except Exception as e:
         conn.close()
         sent_message = bot.reply_to(message, f"Error: {str(e)}")
         delete_previous(bot, chat_id, message.message_id, context)
         store_message_id(context, sent_message.message_id)
+        logging.error(f"Error in {command}: {str(e)}")
 
 # Content Locks
 @bot.message_handler(content_types=['text', 'photo', 'video', 'sticker', 'forward'])
 def content_handler(message):
     chat_id = str(message.chat.id)
-    user_id = str(message.from_user.id)
     context = defaultdict(dict)
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
@@ -313,19 +483,19 @@ def content_handler(message):
             if lock['status'] == 'on':
                 if lock_type == 'links' and message.entities and any(e.type == 'url' for e in message.entities):
                     bot.delete_message(chat_id, message.message_id)
-                    sent_message = bot.reply_to(message, "Links are locked!")
+                    sent_message = bot.reply_to(message, "🔗 Links are locked!")
                     store_message_id(context, sent_message.message_id)
                 elif lock_type == 'media' and (message.photo or message.video):
                     bot.delete_message(chat_id, message.message_id)
-                    sent_message = bot.reply_to(message, "Media is locked!")
+                    sent_message = bot.reply_to(message, "📸 Media is locked!")
                     store_message_id(context, sent_message.message_id)
                 elif lock_type == 'stickers' and message.sticker:
                     bot.delete_message(chat_id, message.message_id)
-                    sent_message = bot.reply_to(message, "Stickers are locked!")
+                    sent_message = bot.reply_to(message, "😀 Stickers are locked!")
                     store_message_id(context, sent_message.message_id)
                 elif lock_type == 'forwards' and message.forward_from:
                     bot.delete_message(chat_id, message.message_id)
-                    sent_message = bot.reply_to(message, "Forwards are locked!")
+                    sent_message = bot.reply_to(message, "📤 Forwards are locked!")
                     store_message_id(context, sent_message.message_id)
     except Exception as e:
         sent_message = bot.reply_to(message, f"Error: {str(e)}")
@@ -376,39 +546,6 @@ def captcha_response(call):
         sent_message = bot.edit_message_text(f"@{call.from_user.username} failed CAPTCHA!", chat_id, call.message.message_id)
         store_message_id(context, sent_message.message_id)
 
-# Start Command
-@bot.message_handler(commands=['start', 'Start'])
-def start(message):
-    context = defaultdict(dict)
-    chat_id = str(message.chat.id)
-    user = message.from_user
-    logging.info(f"Start command received in chat_id: {chat_id}, user: {user.id}, type: {message.chat.type}, text: {message.text}")
-    try:
-        logging.info(f"Bot username: {bot.get_me().username}")
-        if message.chat.type != 'private':
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("🔧 Open Settings in Private", url=f"t.me/{bot.get_me().username}"))
-            sent_message = bot.reply_to(message, "Private mein settings kholo ya group mein commands use karo!", reply_markup=markup)
-            logging.info(f"Group response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
-        else:
-            text = (f"👋 Hey {user.first_name}, welcome to UltimateBot!\n"
-                    "🧠 The smartest way to run and grow your Telegram groups!\n"
-                    "⚡️ Use commands in group or tweak settings here.\n"
-                    "Add me as admin in your group.")
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton("🔧 Settings Menu", callback_data='main'),
-                types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true")
-            )
-            sent_message = bot.reply_to(message, text, reply_markup=markup)
-            logging.info(f"Private response sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
-        delete_previous(bot, chat_id, message.message_id, context)
-        store_message_id(context, sent_message.message_id)
-    except Exception as e:
-        logging.error(f"Error in start command: {str(e)}")
-        sent_message = bot.reply_to(message, f"Error: {str(e)}")
-        store_message_id(context, sent_message.message_id)    
-
 # Settings Menu
 @bot.callback_query_handler(func=lambda call: call.data == 'main')
 def settings_menu(call):
@@ -423,11 +560,12 @@ def settings_menu(call):
     ]
     for text, data in buttons:
         markup.add(types.InlineKeyboardButton(text, callback_data=data))
+    markup.add(types.InlineKeyboardButton("⬅️ Back to Commands", callback_data='show_commands'))
     sent_message = bot.edit_message_text("Settings Menu:", chat_id, call.message.message_id, reply_markup=markup)
     store_message_id(context, sent_message.message_id)
-    logging.info(f"Settings menu sent, message_id: {sent_message.message_id}")
+    logging.info(f"Settings menu sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
 
-# Moderation Menu
+# Moderation Menu with Back Buttons
 @bot.callback_query_handler(func=lambda call: call.data.startswith('moderation'))
 def moderation_menu(call):
     chat_id = str(call.message.chat.id)
@@ -436,7 +574,7 @@ def moderation_menu(call):
         delete_previous(bot, chat_id, call.message.message_id, context)
         sent_message = bot.send_message(chat_id, "Sirf group creator settings access kar sakte hain!")
         store_message_id(context, sent_message.message_id)
-        logging.info(f"Access denied for non-creator, message_id: {sent_message.message_id}")
+        logging.info(f"Access denied for non-creator, chat_id: {chat_id}, message_id: {sent_message.message_id}")
         return
     delete_previous(bot, chat_id, call.message.message_id, context)
     data = call.data.split('_')
@@ -444,18 +582,16 @@ def moderation_menu(call):
     c = conn.cursor()
 
     if len(data) == 1:
-        markup = types.InlineKeyboardMarkup()
+        markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("🔍 Anti-NSFW", callback_data='moderation_antinsfw'),
             types.InlineKeyboardButton("⚠️ Warns", callback_data='moderation_warns'),
-            types.InlineKeyboardButton("👥 Actions", callback_data='moderation_actions')
-        )
-        markup.add(
+            types.InlineKeyboardButton("👥 Actions", callback_data='moderation_actions'),
             types.InlineKeyboardButton("🔒 Locks", callback_data='moderation_locks'),
             types.InlineKeyboardButton("🛡️ CAPTCHA", callback_data='moderation_captcha'),
             types.InlineKeyboardButton("📜 Logs", callback_data='moderation_logs')
         )
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='main'))
+        markup.add(types.InlineKeyboardButton("⬅️ Back to Main", callback_data='main' if call.message.chat.type == 'private' else 'group_menu'))
         sent_message = bot.edit_message_text("Moderation Tools:", chat_id, call.message.message_id, reply_markup=markup)
     elif len(data) == 2:
         tool = data[1]
@@ -482,10 +618,16 @@ def moderation_menu(call):
             ])
         elif tool == 'locks' and status == 'on':
             buttons.append([
-                types.InlineKeyboardButton("🔗 Links", callback_data=f'moderation_{tool}_links'),
-                types.InlineKeyboardButton("📸 Media", callback_data=f'moderation_{tool}_media'),
-                types.InlineKeyboardButton("😀 Stickers", callback_data=f'moderation_{tool}_stickers'),
-                types.InlineKeyboardButton("📤 Forwards", callback_data=f'moderation_{tool}_forwards')
+                types.InlineKeyboardButton("🔗 Links", callback_data=f'moderation_lock_links'),
+                types.InlineKeyboardButton("📸 Media", callback_data=f'moderation_lock_media'),
+                types.InlineKeyboardButton("😀 Stickers", callback_data=f'moderation_lock_stickers'),
+                types.InlineKeyboardButton("📤 Forwards", callback_data=f'moderation_lock_forwards')
+            ])
+            buttons.append([
+                types.InlineKeyboardButton("🔓 Unlock Links", callback_data=f'moderation_unlock_links'),
+                types.InlineKeyboardButton("🔓 Unlock Media", callback_data=f'moderation_unlock_media'),
+                types.InlineKeyboardButton("🔓 Unlock Stickers", callback_data=f'moderation_unlock_stickers'),
+                types.InlineKeyboardButton("🔓 Unlock Forwards", callback_data=f'moderation_unlock_forwards')
             ])
         elif tool == 'captcha' and status == 'on':
             buttons.append([
@@ -494,7 +636,7 @@ def moderation_menu(call):
             ])
         elif tool == 'logs':
             buttons.append([types.InlineKeyboardButton("📋 View Logs", callback_data=f'moderation_{tool}_view')])
-        buttons.append([types.InlineKeyboardButton("⬅️ Back", callback_data='moderation')])
+        buttons.append([types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu')])
         markup = types.InlineKeyboardMarkup(buttons)
         sent_message = bot.edit_message_text(f"Moderation {tool}:", chat_id, call.message.message_id, reply_markup=markup)
     elif len(data) == 3:
@@ -506,6 +648,9 @@ def moderation_menu(call):
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', tool, json.dumps(settings)))
             sent_message = bot.edit_message_text(f"{tool.capitalize()} {'enabled' if settings['status'] == 'on' else 'disabled'}!", chat_id, call.message.message_id)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         elif action == 'setlimit':
             context['awaiting_input'] = f'moderation_{tool}_setlimit'
             sent_message = bot.edit_message_text("Send warn limit (e.g., 3):", chat_id, call.message.message_id)
@@ -513,16 +658,14 @@ def moderation_menu(call):
             conn.close()
             return
         elif action == 'action':
-            markup = types.InlineKeyboardMarkup()
+            markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
                 types.InlineKeyboardButton("🚫 Ban", callback_data=f'moderation_{tool}_action_ban'),
                 types.InlineKeyboardButton("🔇 Mute", callback_data=f'moderation_{tool}_action_mute'),
-                types.InlineKeyboardButton("🦵 Kick", callback_data=f'moderation_{tool}_action_kick')
+                types.InlineKeyboardButton("🦵 Kick", callback_data=f'moderation_{tool}_action_kick'),
+                types.InlineKeyboardButton("🗑️ Delete", callback_data=f'moderation_{tool}_action_delete')
             )
-            markup.add(
-                types.InlineKeyboardButton("🗑️ Delete", callback_data=f'moderation_{tool}_action_delete'),
-                types.InlineKeyboardButton("⬅️ Back", callback_data=f'moderation_{tool}')
-            )
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
             sent_message = bot.edit_message_text(f"Set action for {tool}:", chat_id, call.message.message_id, reply_markup=markup)
             store_message_id(context, sent_message.message_id)
             conn.close()
@@ -537,17 +680,20 @@ def moderation_menu(call):
         elif action in ['links', 'media', 'stickers', 'forwards']:
             c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', f'lock_{action}'))
             lock = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off'}
-            lock['status'] = 'on' if lock['status'] == 'off' else 'off'
+            lock['status'] = 'on' if tool == 'lock' else 'off'
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', f'lock_{action}', json.dumps(lock)))
             sent_message = bot.edit_message_text(f"{action.capitalize()} {'locked' if lock['status'] == 'on' else 'unlocked'}!", chat_id, call.message.message_id)
-        elif action == 'type':
             markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
+        elif action == 'type':
+            markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("📝 Math", callback_data=f'moderation_{tool}_type_math'),
-                types.InlineKeyboardButton("🔤 Word", callback_data=f'moderation_{tool}_type_word')
+                types.InlineKeyboardButton("📝 Math", callback_data=f'moderation_{tool}_type_math_back'),
+                types.InlineKeyboardButton("🔤 Word", callback_data=f'moderation_{tool}_type_word_back')
             )
-            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=f'moderation_{tool}'))
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
             sent_message = bot.edit_message_text("Set CAPTCHA type:", chat_id, call.message.message_id, reply_markup=markup)
             store_message_id(context, sent_message.message_id)
             conn.close()
@@ -571,12 +717,12 @@ def moderation_menu(call):
                     types.InlineKeyboardButton("◀️ Previous", callback_data=f'moderation_logs_view_prev_{page}'),
                     types.InlineKeyboardButton("Next ▶️", callback_data=f'moderation_logs_view_next_{page}')
                 )
-                markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=f'moderation_logs'))
+                markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
                 sent_message = bot.edit_message_text(f"Logs Page {page}:\n{log_text}", chat_id, call.message.message_id, reply_markup=markup)
             else:
                 sent_message = bot.edit_message_text("No logs found!", chat_id, call.message.message_id)
                 markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=f'moderation_logs'))
+                markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
                 bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
             store_message_id(context, sent_message.message_id)
             conn.close()
@@ -584,8 +730,9 @@ def moderation_menu(call):
         c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                   (chat_id, 'moderation', tool, json.dumps(settings)))
         conn.commit()
-        conn.close()
-        moderation_menu(call)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+        bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
     elif len(data) == 4:
         tool, subaction, value = data[1], data[2], data[3]
         c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', tool))
@@ -595,15 +742,19 @@ def moderation_menu(call):
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', tool, json.dumps(settings)))
             sent_message = bot.edit_message_text(f"Action for {tool} set to {value}!", chat_id, call.message.message_id)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
             conn.commit()
         elif subaction == 'type':
             settings['type'] = value
             c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
                       (chat_id, 'moderation', tool, json.dumps(settings)))
             sent_message = bot.edit_message_text(f"CAPTCHA type set to {value}!", chat_id, call.message.message_id)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
             conn.commit()
-        conn.close()
-        moderation_menu(call)
     elif len(data) == 5 and data[2] == 'view':
         tool, action, direction, current_page = data[1], data[2], data[3], int(data[4])
         page = current_page + 1 if direction == 'next' else current_page - 1
@@ -620,17 +771,76 @@ def moderation_menu(call):
                 types.InlineKeyboardButton("◀️ Previous", callback_data=f'moderation_logs_view_prev_{page}'),
                 types.InlineKeyboardButton("Next ▶️", callback_data=f'moderation_logs_view_next_{page}')
             )
-            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_logs'))
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
             sent_message = bot.edit_message_text(f"Logs Page {page}:\n{log_text}", chat_id, call.message.message_id, reply_markup=markup)
         else:
             sent_message = bot.edit_message_text(f"No logs on page {page}!", chat_id, call.message.message_id)
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_logs'))
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
             bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         store_message_id(context, sent_message.message_id)
         conn.close()
+    elif len(data) == 4 and data[2] in ['type', 'time'] and data[3].endswith('_back'):
+        tool, subaction, value = data[1], data[2], data[3].replace('_back', '')
+        c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', tool))
+        settings = json.loads(c.fetchone()[0]) if c.fetchone() else {'status': 'off', 'limit': 3, 'action': 'ban', 'type': 'math', 'time': 300}
+        if subaction == 'type':
+            settings['type'] = value
+            c.execute("INSERT OR REPLACE INTO settings (chat_id, feature, subfeature, data) VALUES (?, ?, ?, ?)",
+                      (chat_id, 'moderation', tool, json.dumps(settings)))
+            sent_message = bot.edit_message_text(f"CAPTCHA type set to {value}!", chat_id, call.message.message_id)
+            markup = types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu')
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
+            conn.commit()
+        elif subaction == 'time':
+            context['awaiting_input'] = f'moderation_{tool}_time'
+            sent_message = bot.edit_message_text("Send CAPTCHA time (e.g., 4m 5s):", chat_id, call.message.message_id)
+            store_message_id(context, sent_message.message_id)
+            conn.close()
+            return
     store_message_id(context, sent_message.message_id)
-    logging.info(f"Moderation menu sent, message_id: {sent_message.message_id}")
+    logging.info(f"Moderation menu sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+    conn.close()
+
+# Status Command
+@bot.message_handler(commands=['status'])
+def status_command(message):
+    chat_id = str(message.chat.id)
+    context = defaultdict(dict)
+    if message.chat.type == 'private' or not is_creator(bot, chat_id, message.from_user.id):
+        sent_message = bot.reply_to(message, "Group mein creator ke roop mein use karo!")
+        delete_previous(bot, chat_id, message.message_id, context)
+        store_message_id(context, sent_message.message_id)
+        return
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    status_text = "Current Settings:\n"
+    settings = {
+        'antinsfw': '🔍 Anti-NSFW',
+        'captcha': '🛡️ CAPTCHA',
+        'lock_links': '🔗 Links Lock',
+        'lock_media': '📸 Media Lock',
+        'lock_stickers': '😀 Stickers Lock',
+        'lock_forwards': '📤 Forwards Lock'
+    }
+    for key, name in settings.items():
+        c.execute("SELECT data FROM settings WHERE chat_id=? AND feature=? AND subfeature=?", (chat_id, 'moderation', key))
+        result = c.fetchone()
+        status = json.loads(result[0])['status'] if result else 'off'
+        status_text += f"{name}: {'✅ ON' if status == 'on' else '❌ OFF'}\n"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔒 Lock Settings", callback_data='moderation_lock'),
+        types.InlineKeyboardButton("🔓 Unlock Settings", callback_data='moderation_unlock'),
+        types.InlineKeyboardButton("🛡️ CAPTCHA Settings", callback_data='moderation_captcha'),
+        types.InlineKeyboardButton("🔍 Anti-NSFW", callback_data='moderation_antinsfw'),
+        types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu')
+    )
+    sent_message = bot.reply_to(message, status_text, reply_markup=markup)
+    delete_previous(bot, chat_id, message.message_id, context)
+    store_message_id(context, sent_message.message_id)
+    logging.info(f"Status sent, chat_id: {chat_id}, message_id: {sent_message.message_id}")
+    conn.close()
 
 # Handle User Inputs
 @bot.message_handler(content_types=['text'])
@@ -694,10 +904,11 @@ def handle_input(message):
                         c.execute("INSERT INTO logs (chat_id, action, user_id, reason, timestamp) VALUES (?, ?, ?, ?, ?)",
                                   (chat_id, 'tempmute', user_id, f"{reason} (Duration: {duration}s)", timestamp))
             conn.commit()
-            conn.close()
-            moderation_menu(types.CallbackQuery(id=str(chat_id), from_user=message.from_user, message=bot.get_chat(chat_id), data=f'moderation_{subfeature}'))
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Back to Menu", callback_data='group_menu'))
+            bot.edit_message_reply_markup(chat_id, sent_message.message_id, reply_markup=markup)
         store_message_id(context, sent_message.message_id)
-        logging.info(f"User input handled, message_id: {sent_message.message_id}")
+        logging.info(f"User input handled, chat_id: {chat_id}, message_id: {sent_message.message_id}")
     except Exception as e:
         conn.close()
         sent_message = bot.send_message(chat_id, f"Error: {str(e)}")
