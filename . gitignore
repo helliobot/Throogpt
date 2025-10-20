@@ -1,5 +1,4 @@
-# Hide secrets and unnecessary files
 .env
+bot.db
 __pycache__/
 *.pyc
-*.log
