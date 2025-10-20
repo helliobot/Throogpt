@@ -701,13 +701,19 @@ def handle_input(message):
         store_message_id(context, sent_message.message_id)
 
 # Webhook
+import logging
+logging.basicConfig(level=logging.INFO)
+
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
+    logging.info(f"Received webhook request: {request.get_data()}")
     if request.headers.get('content-type') == 'application/json':
         json_str = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_str)
         bot.process_new_updates([update])
+        logging.info("Webhook processed successfully")
         return '', 200
+    logging.error("Invalid content type")
     return 'OK', 200
 
 @app.route('/')
