@@ -9,8 +9,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
-BOT_TOKEN = os.getenv('BOT_TOKEN')  # सुनिश्चित करो कि .env में BOT_TOKEN सेट है
-bot = telebot.TeleBot(BOT_TOKEN)
+TOKEN = os.getenv('BOT_TOKEN')  # सुनिश्चित करो कि .env में BOT_TOKEN सेट है
+bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 # SQLite Database Setup
@@ -704,7 +704,7 @@ def handle_input(message):
 import logging
 logging.basicConfig(level=logging.INFO)
 
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+@app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     logging.info(f"Received webhook request: {request.get_data()}")
     if request.headers.get('content-type') == 'application/json':
@@ -722,6 +722,6 @@ def home():
 
 if __name__ == '__main__':
     bot.remove_webhook()
-    bot.set_webhook(url=f"https://helliobot.onrender.com/{BOT_TOKEN}")
+    bot.set_webhook(url=f"https://helliobot.onrender.com/{TOKEN}")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
