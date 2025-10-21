@@ -5,14 +5,17 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import logging
 from datetime import datetime, timedelta
-from threading import Lock
+from threading import Lock, Thread
+import html
 
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     filename='bot.log',
     format='%(asctime)s %(levelname)s: %(message)s'
 )
 
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
@@ -22,14 +25,14 @@ app = Flask(__name__)
 flood_locks = defaultdict(Lock)
 user_messages = defaultdict(list)
 MENU_CACHE = {}
-bot.temp_data = {}  # For state management across all features
+bot.temp_data = {}  # For state management
 
-# COMPLETE DATABASE SETUP (ALL TABLES - OPTIMIZED WITH INDEXES)
+# DATABASE SETUP (ALL TABLES WITH INDEXES)
 def init_db():
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     
-    # ORIGINAL TABLES
+    # Core tables
     c.execute('''CREATE TABLE IF NOT EXISTS settings 
                  (chat_id TEXT, feature TEXT, subfeature TEXT, data TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS responses 
@@ -43,9 +46,9 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS logs 
                  (chat_id TEXT, action TEXT, user_id TEXT, reason TEXT, timestamp TEXT)''')
     
-    # ORIGINAL FIXES + 6 NEW FEATURES
+    # Additional features
     c.execute('''CREATE TABLE IF NOT EXISTS analytics 
-                 (chat_id TEXT, user_id TEXT, action TEXT, timestamp TEXT)''')
+                 (chat_id TEXT, user_id TEXT, action TEXT, timestamp TEXT, metadata TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS triggers 
                  (chat_id TEXT, keyword TEXT, response TEXT, regex INTEGER)''')
     c.execute('''CREATE TABLE IF NOT EXISTS welcome 
@@ -57,7 +60,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS blacklists 
                  (chat_id TEXT, word TEXT, regex INTEGER)''')
     
-    # NEW ADVANCED FEATURES (10 MORE)
+    # Advanced features
     c.execute('''CREATE TABLE IF NOT EXISTS permissions 
                  (chat_id TEXT, user_id TEXT, role TEXT, commands TEXT, duration TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS custom_commands 
@@ -79,7 +82,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS plugins 
                  (chat_id TEXT, plugin_name TEXT, config TEXT, active INTEGER)''')
     
-    # INDEXES FOR SPEED (ALL TABLES)
+    # Indexes for performance
     for table in ['settings', 'responses', 'schedules', 'blocks', 'warns', 'logs', 'analytics', 'triggers', 'welcome', 'flood_settings', 
                   'broadcasts', 'blacklists', 'permissions', 'custom_commands', 'polls', 'notes', 'rss_feeds', 'subscriptions', 
                   'federations', 'captchas', 'message_dump', 'plugins']:
@@ -90,107 +93,176 @@ def init_db():
 
 init_db()
 
-# UTILITY FUNCTIONS (OPTIMIZED WITH CACHE)
+# UTILITY FUNCTIONS
+def sanitize_input(text):
+    """Sanitize input to prevent SQL injection and Telegram formatting issues."""
+    if not text:
+        raise ValueError("Input cannot be empty")
+    text = html.escape(text.strip())  # Escape HTML characters
+    if len(text) > 4096:  # Telegram message limit
+        raise ValueError("Input too long (max 4096 characters)")
+    return text
+
+def validate_url(url):
+    """Validate URL format."""
+    url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
+    return bool(url_pattern.match(url))
+
+def validate_time_format(time_str):
+    """Validate time format (e.g., 1d, 2h, 30m)."""
+    time_pattern = re.compile(r'^\d+[smhd]$')
+    return bool(time_pattern.match(time_str))
+
+def validate_regex(regex_str):
+    """Validate regex pattern."""
+    try:
+        re.compile(regex_str)
+        return True
+    except re.error:
+        return False
+
 def parse_time(text): 
     try:
         total = sum(int(v) * {'s':1,'m':60,'h':3600,'d':86400}[u] for v,u in re.findall(r'(\d+)([smhd])', text.lower()))
         return total if total > 0 else 300
-    except: return 300
+    except: 
+        return 300
 
 def parse_number(text): 
-    try: return max(1, int(text))
-    except: return 3
+    try: 
+        return max(1, int(text))
+    except: 
+        return 3
 
-def is_creator(bot, chat_id, user_id):
+def is_creator_or_admin(bot, chat_id, user_id):
+    """Check if user is creator or has admin/mod role."""
     if str(chat_id).startswith('-'):
-        try: return bot.get_chat_member(chat_id, user_id).status == 'creator'
-        except: return False
+        try:
+            status = bot.get_chat_member(chat_id, user_id).status
+            if status == 'creator':
+                return True
+            conn = sqlite3.connect('bot.db')
+            c = conn.cursor()
+            c.execute("SELECT role FROM permissions WHERE chat_id=? AND user_id=?", (chat_id, str(user_id)))
+            role = c.fetchone()
+            conn.close()
+            return role and role[0] in ['ADMIN', 'MOD']
+        except:
+            return False
     return True
 
+def safe_db_operation(query, params, operation="execute"):
+    """Safely execute database operations with error handling."""
+    try:
+        conn = sqlite3.connect('bot.db', timeout=10)
+        c = conn.cursor()
+        if operation == "execute":
+            c.execute(query, params)
+        elif operation == "fetch":
+            c.execute(query, params)
+            return c.fetchall()
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        logging.error(f"Database error: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_settings(chat_id):
-    if chat_id in MENU_CACHE: return MENU_CACHE[chat_id]  # Cache hit
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT feature, subfeature, data FROM settings WHERE chat_id=?", (chat_id,))
-    settings = {f"{r[0]}_{r[1]}": json.loads(r[2]) for r in c.fetchall()}
-    conn.close()
-    MENU_CACHE[chat_id] = settings  # Cache store
+    if chat_id in MENU_CACHE: 
+        return MENU_CACHE[chat_id]
+    settings = {}
+    rows = safe_db_operation("SELECT feature, subfeature, data FROM settings WHERE chat_id=?", (chat_id,), "fetch")
+    if rows:
+        settings = {f"{r[0]}_{r[1]}": json.loads(r[2]) for r in rows}
+    MENU_CACHE[chat_id] = settings
     return settings
 
 def safe_json(data): 
     return json.loads(data) if data else {'status': 'off'}
 
-# FLOOD PROTECTION (OPTIMIZED WITH LOCK)
+def cleanup_temp_data():
+    """Remove expired temp_data entries."""
+    now = time.time()
+    for key in list(bot.temp_data.keys()):
+        if 'timeout' in bot.temp_data[key] and now > bot.temp_data[key]['timeout']:
+            del bot.temp_data[key]
+
+# Run cleanup periodically
+Thread(target=lambda: [cleanup_temp_data() or time.sleep(60) for _ in iter(int, 1)], daemon=True).start()
+
+# FLOOD PROTECTION
 def check_flood(chat_id, user_id):
+    """Check and handle flood control based on flood_settings."""
+    rows = safe_db_operation("SELECT flood_limit, action FROM flood_settings WHERE chat_id=?", (chat_id,), "fetch")
+    limit = rows[0][0] if rows else 5
+    action = rows[0][1] if rows else 'delete'
+    
     with flood_locks[(chat_id, user_id)]:
         now = time.time()
         msgs = [t for t in user_messages[(chat_id, user_id)] if now - t < 60]
         user_messages[(chat_id, user_id)] = msgs + [now]
-        if len(msgs) >= 5: return True
+        
+        if len(msgs) >= limit:
+            log_activity(chat_id, user_id, f"flood_{action}", {'limit': limit})
+            return action
     return False
 
-# ANALYTICS (OPTIMIZED)
-def log_activity(chat_id, user_id, action):
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO analytics VALUES (?, ?, ?, ?)", 
-              (chat_id, str(user_id), action, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+# ANALYTICS
+def log_activity(chat_id, user_id, action, metadata=None):
+    safe_db_operation("INSERT INTO analytics VALUES (?, ?, ?, ?, ?)", 
+                     (chat_id, str(user_id), action, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), json.dumps(metadata or {})))
 
 def get_analytics(chat_id, period='week'):
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
     delta = 7 if period == 'week' else 30
     ago = (datetime.now() - timedelta(days=delta)).strftime("%Y-%m-%d")
-    c.execute("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM analytics WHERE chat_id=? AND timestamp > ?", 
-              (chat_id, ago))
-    total, users = c.fetchone() or (0, 0)
-    conn.close()
+    rows = safe_db_operation("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM analytics WHERE chat_id=? AND timestamp > ?", 
+                            (chat_id, ago), "fetch")
+    total, users = rows[0] if rows else (0, 0)
     return f"📊 {total} actions, {users} users ({period})"
 
-# TRIGGERS (OPTIMIZED WITH CACHE)
+# TRIGGERS
 def check_triggers(chat_id, text):
     if (chat_id, 'triggers') in MENU_CACHE: 
         triggers = MENU_CACHE[(chat_id, 'triggers')]
     else:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT keyword, response, regex FROM triggers WHERE chat_id=?", (chat_id,))
-        triggers = c.fetchall()
-        conn.close()
+        triggers = safe_db_operation("SELECT keyword, response, regex FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
         MENU_CACHE[(chat_id, 'triggers')] = triggers
     for kw, resp, regex in triggers:
-        if regex and re.search(kw, text) or kw.lower() in text.lower():
+        if regex and re.search(kw, text, re.IGNORECASE) or kw.lower() in text.lower():
             return resp
     return None
 
-# WELCOME (SIMPLE)
+# WELCOME
 def get_welcome(chat_id, is_welcome=True):
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("SELECT welcome_msg, leave_msg FROM welcome WHERE chat_id=?", (chat_id,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if is_welcome and result else result[1] if result else "Welcome!" if is_welcome else "Goodbye!"
+    row = safe_db_operation("SELECT welcome_msg, leave_msg FROM welcome WHERE chat_id=?", (chat_id,), "fetch")
+    default = "Welcome!" if is_welcome else "Goodbye!"
+    return row[0][0] if is_welcome and row and row[0][0] else row[0][1] if row and row[0][1] else default
 
-# BLACKLIST (OPTIMIZED WITH CACHE)
+# BLACKLIST
 def check_blacklist(chat_id, text):
     if (chat_id, 'blacklists') in MENU_CACHE: 
         bl = MENU_CACHE[(chat_id, 'blacklists')]
     else:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,))
-        bl = c.fetchall()
-        conn.close()
+        bl = safe_db_operation("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
         MENU_CACHE[(chat_id, 'blacklists')] = bl
     for word, regex in bl:
-        if regex and re.search(word, text) or word.lower() in text.lower():
+        if regex and re.search(word, text, re.IGNORECASE) or word.lower() in text.lower():
             return True
     return False
 
-# START COMMAND (FIXED: GROUP = INLINE ONLY, NO REPLY KEYBOARD)
+# CAPTCHA
+def generate_captcha():
+    """Generate a simple math captcha."""
+    a, b = random.randint(1, 10), random.randint(1, 10)
+    answer = a + b
+    question = f"What is {a} + {b}?"
+    options = [str(answer), str(answer + random.randint(1, 5)), str(answer - random.randint(1, 5)), str(random.randint(1, 20))]
+    random.shuffle(options)
+    return {'question': question, 'answer': str(answer), 'options': options}
+
+# START COMMAND
 @bot.message_handler(commands=['start'])
 def start(message):
     chat_id = str(message.chat.id)
@@ -204,30 +276,37 @@ def start(message):
     )
     
     if message.chat.type == 'private':
-        markup.add(types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true"))
+        markup.add(
+            types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true"),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='help')
+        )
         text = f"👋 {user.first_name}, Ultimate Advanced Bot!"
         sent_message = bot.reply_to(message, text, reply_markup=markup)
     else:
-        markup.add(types.InlineKeyboardButton("📊 Analytics", callback_data='analytics_menu'))
-        markup.add(types.InlineKeyboardButton("🎯 Triggers", callback_data='triggers_menu'))
-        markup.add(types.InlineKeyboardButton("👋 Welcome", callback_data='welcome_menu'))
-        markup.add(types.InlineKeyboardButton("🛡️ Anti-Flood", callback_data='flood_menu'))
-        markup.add(types.InlineKeyboardButton("📢 Broadcast", callback_data='broadcast_menu'))
-        markup.add(types.InlineKeyboardButton("🚫 Blacklists", callback_data='blacklist_menu'))
+        markup.add(
+            types.InlineKeyboardButton("📊 Analytics", callback_data='analytics_menu'),
+            types.InlineKeyboardButton("🎯 Triggers", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("👋 Welcome", callback_data='welcome_menu'),
+            types.InlineKeyboardButton("🛡️ Anti-Flood", callback_data='flood_menu'),
+            types.InlineKeyboardButton("📢 Broadcast", callback_data='broadcast_menu'),
+            types.InlineKeyboardButton("🚫 Blacklists", callback_data='blacklist_menu')
+        )
         text = "🤖 Advanced Group Bot Active!"
         sent_message = bot.send_message(chat_id, text, reply_markup=markup)
     
-    # Auto-delete after 2s (next response)
+    # Auto-delete after 2s
     time.sleep(2)
-    try: bot.delete_message(chat_id, sent_message.message_id)
-    except: pass
+    try:
+        bot.delete_message(chat_id, sent_message.message_id)
+    except:
+        pass
 
-# STATUS COMMAND (FIXED WITH CACHE)
+# STATUS COMMAND
 @bot.message_handler(commands=['status'])
 def status_command(message):
     chat_id = str(message.chat.id)
-    if message.chat.type == 'private' or not is_creator(bot, chat_id, message.from_user.id):
-        return bot.reply_to(message, "Group creator only!")
+    if message.chat.type == 'private' or not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, "Group creator or admin only!")
     
     settings = get_all_settings(chat_id)
     status_text = "🔧 ADVANCED SETTINGS:\n"
@@ -248,26 +327,47 @@ def status_command(message):
         status = safe_json(settings.get(key, '{}'))['status']
         status_text += f"{name}: {'✅' if status == 'on' else '❌'}\n"
     
-    markup = types.InlineKeyboardMarkup(row_width=1)  # Important: Single column
-    markup.add(types.InlineKeyboardButton("🔧 Full Menu", callback_data='group_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔧 Full Menu", callback_data='group_menu'),
+        types.InlineKeyboardButton("📋 Commands", callback_data='show_commands')
+    )
     bot.reply_to(message, status_text, reply_markup=markup)
 
-# CONTENT HANDLER (ALL FEATURES INTEGRATED)
+# CONTENT HANDLER
 @bot.message_handler(content_types=['text'])
 def content_handler(message):
     chat_id = str(message.chat.id)
-    text = message.text
+    text = sanitize_input(message.text)
     user_id = str(message.from_user.id)
-    log_activity(chat_id, user_id, 'message')
+    log_activity(chat_id, user_id, 'message', {'text': text})
+    
+    # Save message to dump if enabled
+    settings = get_all_settings(chat_id)
+    if safe_json(settings.get('message_dump', '{}'))['status'] == 'on':
+        rows = safe_db_operation("SELECT dump_channel FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+        if rows:
+            safe_db_operation("INSERT INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                            (chat_id, text, user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows[0][0]))
     
     # ANTI-FLOOD
-    if check_flood(chat_id, user_id):
+    flood_action = check_flood(chat_id, user_id)
+    if flood_action:
         bot.delete_message(chat_id, message.message_id)
-        return bot.reply_to(message, "🛑 Slow down!")
+        if flood_action == 'mute':
+            bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False})
+            bot.reply_to(message, "🛑 You are muted for flooding!")
+        elif flood_action == 'ban':
+            bot.kick_chat_member(chat_id, user_id)
+            bot.reply_to(message, "🛑 You are banned for flooding!")
+        else:
+            bot.reply_to(message, "🛑 Slow down! Message deleted.")
+        return
     
     # BLACKLIST
     if check_blacklist(chat_id, text):
         bot.delete_message(chat_id, message.message_id)
+        log_activity(chat_id, user_id, 'blacklist_hit')
         return bot.reply_to(message, "🚫 Blocked!")
     
     # TRIGGERS
@@ -276,107 +376,107 @@ def content_handler(message):
         return bot.reply_to(message, trigger)
     
     # ORIGINAL LOCKS
-    settings = get_all_settings(chat_id)
     if message.entities and any(e.type == 'url' for e in message.entities) and safe_json(settings.get('moderation_lock_links', '{}'))['status'] == 'on':
         bot.delete_message(chat_id, message.message_id)
         return bot.reply_to(message, "🔗 Links locked!")
-
-    # HANDLE TEMP DATA INPUTS (FOR ALL FEATURES)
+    
+    # HANDLE TEMP DATA INPUTS
     if chat_id in bot.temp_data:
         action = bot.temp_data[chat_id].get('action')
         if action:
             handlers = {
-    'grant_role': handle_grant_input,
-    'triggers_add': handle_triggers_add,
-    'triggers_edit': handle_triggers_edit_delete,  # NEW
-    'triggers_delete': handle_triggers_edit_delete,  # NEW
-    'welcome_set': handle_welcome_set,
-    'flood_set_limit': handle_flood_set_limit,
-    'flood_enable': handle_flood_enable,  # NEW
-    'broadcast_send': handle_broadcast_send,
-    'broadcast_groups': handle_broadcast_groups,  # NEW
-    'blacklist_add': handle_blacklist_add,
-    'customcmd_create': handle_customcmd_create,
-    'customcmd_edit': handle_customcmd_edit,  # NEW
-    'poll_new': handle_poll_new,
-    'note_save': handle_note_save,
-    'rss_add': handle_rss_add,
-    'sub_grant': handle_sub_grant,
-    'fed_link': handle_fed_link,
-    'captcha_set': handle_captcha_set,
-    'dump_set': handle_dump_set,
-    'plugin_install': handle_plugin_install
-}
+                'grant_role': handle_grant_input,
+                'triggers_add': handle_triggers_add,
+                'triggers_edit': handle_triggers_edit_delete,
+                'triggers_delete': handle_triggers_edit_delete,
+                'welcome_set': handle_welcome_set,
+                'flood_set_limit': handle_flood_set_limit,
+                'flood_enable': handle_flood_enable,
+                'broadcast_send': handle_broadcast_send,
+                'broadcast_groups': handle_broadcast_groups,
+                'blacklist_add': handle_blacklist_add,
+                'customcmd_create': handle_customcmd_create,
+                'customcmd_edit': handle_customcmd_edit,
+                'poll_new': handle_poll_new,
+                'note_save': handle_note_save,
+                'rss_add': handle_rss_add,
+                'sub_grant': handle_sub_grant,
+                'fed_link': handle_fed_link,
+                'captcha_set': handle_captcha_set,
+                'dump_set': handle_dump_set,
+                'plugin_install': handle_plugin_install
+            }
             if action in handlers:
                 handlers[action](message)
                 return
- # MISSING HANDLERS - ALL FIXED!
+
+# HANDLERS
 def handle_triggers_edit_delete(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     action = bot.temp_data[chat_id]['action']
-    keyword = message.text
+    keyword = sanitize_input(message.text)
     
     if action == 'triggers_edit' and 'sub_action' not in bot.temp_data[chat_id]:
         bot.temp_data[chat_id]['sub_action'] = 'edit_response'
         bot.temp_data[chat_id]['keyword'] = keyword
+        bot.temp_data[chat_id]['timeout'] = time.time() + 300
         bot.reply_to(message, f"✏️ Send new response for trigger '{keyword}':")
         return
     
     if action == 'triggers_edit' and bot.temp_data[chat_id].get('sub_action') == 'edit_response':
-        new_response = message.text
+        new_response = sanitize_input(message.text)
         keyword = bot.temp_data[chat_id]['keyword']
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("UPDATE triggers SET response=? WHERE chat_id=? AND keyword=?", 
-                  (new_response, chat_id, keyword))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, f"✅ Trigger '{keyword}' updated!")
+        if len(new_response) > 1000:
+            return bot.reply_to(message, "❌ Response too long!")
+        if safe_db_operation("UPDATE triggers SET response=? WHERE chat_id=? AND keyword=?", 
+                           (new_response, chat_id, keyword)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, f"✅ Trigger '{keyword}' updated!")
+        else:
+            bot.reply_to(message, "❌ Error updating trigger!")
     
     elif action == 'triggers_delete':
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("DELETE FROM triggers WHERE chat_id=? AND keyword=?", (chat_id, keyword))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Trigger deleted!")
+        if safe_db_operation("DELETE FROM triggers WHERE chat_id=? AND keyword=?", (chat_id, keyword)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Trigger deleted!")
+        else:
+            bot.reply_to(message, "❌ Trigger not found!")
 
 def handle_flood_enable(message):
     chat_id = str(message.chat.id)
     status = 'on' if message.text.lower() == 'on' else 'off'
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings VALUES (?, 'flood', 'status', ?)", (chat_id, json.dumps({'status': status})))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, f"✅ Flood {'enabled' if status == 'on' else 'disabled'}!")
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'flood', 'status', ?)", 
+                       (chat_id, json.dumps({'status': status}))):
+        bot.reply_to(message, f"✅ Flood {'enabled' if status == 'on' else 'disabled'}!")
+    else:
+        bot.reply_to(message, "❌ Error updating flood settings!")
 
 def handle_broadcast_groups(message):
     chat_id = str(message.chat.id)
-    bot.reply_to(message, "👥 All groups selected!")
+    bot.reply_to(message, "👥 All groups selected!")  # Placeholder
 
 def handle_customcmd_edit(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     if 'sub_action' in bot.temp_data[chat_id]:
         trigger = bot.temp_data[chat_id]['trigger']
-        new_response = message.text
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("UPDATE custom_commands SET response=? WHERE chat_id=? AND trigger=?", 
-                  (new_response, chat_id, trigger))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, f"✅ Command /{trigger} updated!")
+        new_response = sanitize_input(message.text)
+        if len(new_response) > 1000:
+            return bot.reply_to(message, "❌ Response too long!")
+        if safe_db_operation("UPDATE custom_commands SET response=? WHERE chat_id=? AND trigger=?", 
+                           (new_response, chat_id, trigger)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, f"✅ Command /{trigger} updated!")
+        else:
+            bot.reply_to(message, "❌ Error updating command!")
     else:
         bot.temp_data[chat_id]['sub_action'] = 'edit_response'
-        bot.temp_data[chat_id]['trigger'] = message.text.strip('/ ')
+        bot.temp_data[chat_id]['trigger'] = sanitize_input(message.text.strip('/ '))
+        bot.temp_data[chat_id]['timeout'] = time.time() + 300
         bot.reply_to(message, f"✏️ Send new response for /{message.text}:")
-# NEW MEMBER (WELCOME)
+
+# NEW MEMBER
 @bot.message_handler(content_types=['new_chat_members'])
 def new_member_welcome(message):
     chat_id = str(message.chat.id)
@@ -384,6 +484,42 @@ def new_member_welcome(message):
         welcome = get_welcome(chat_id)
         bot.send_message(chat_id, f"{welcome} @{user.username or user.first_name}!")
         log_activity(chat_id, user.id, 'join')
+        
+        # CAPTCHA
+        settings = get_all_settings(chat_id)
+        if safe_json(settings.get('moderation_captcha', '{}'))['status'] == 'on':
+            captcha = generate_captcha()
+            bot.temp_data[f"{chat_id}_{user.id}"] = {'action': 'captcha_verify', 'answer': captcha['answer'], 'timeout': time.time() + 300}
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            for i in range(0, len(captcha['options']), 2):
+                markup.add(
+                    types.InlineKeyboardButton(captcha['options'][i], callback_data=f"captcha_{captcha['options'][i]}_{user.id}"),
+                    types.InlineKeyboardButton(captcha['options'][i+1], callback_data=f"captcha_{captcha['options'][i+1]}_{user.id}") if i+1 < len(captcha['options']) else types.InlineKeyboardButton(" ", callback_data="noop")
+                )
+            bot.send_message(chat_id, f"🛡️ @{user.username or user.first_name}, solve: {captcha['question']} (5 min)", reply_markup=markup)
+
+# CAPTCHA VERIFICATION
+@bot.callback_query_handler(func=lambda call: call.data.startswith('captcha_'))
+def captcha_verify(call):
+    chat_id = str(call.message.chat.id)
+    _, answer, user_id = call.data.split('_')
+    key = f"{chat_id}_{user_id}"
+    if key not in bot.temp_data:
+        bot.answer_callback_query(call.id, "❌ Captcha expired!")
+        return
+    data = bot.temp_data[key]
+    if time.time() > data['timeout']:
+        bot.answer_callback_query(call.id, "❌ Captcha timed out!")
+        bot.kick_chat_member(chat_id, user_id)
+        del bot.temp_data[key]
+        return
+    if answer == data['answer']:
+        bot.answer_callback_query(call.id, "✅ Verified!")
+        bot.delete_message(chat_id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "❌ Wrong answer!")
+        bot.kick_chat_member(chat_id, user_id)
+    del bot.temp_data[key]
 
 # LEFT MEMBER
 @bot.message_handler(content_types=['left_chat_member'])
@@ -392,8 +528,9 @@ def left_member(message):
     user = message.left_chat_member
     leave = get_welcome(chat_id, False)
     bot.send_message(chat_id, f"{leave} @{user.username or user.first_name}")
+    log_activity(chat_id, user.id, 'leave')
 
-# SETTINGS MENU (LOADING FIXED, ARRANGED NO SCROLL)
+# SETTINGS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'main')
 def settings_menu(call):
     bot.answer_callback_query(call.id, "⚙️ Loading...", show_alert=False)
@@ -410,24 +547,23 @@ def settings_menu(call):
            "🌐 Lang: Language settings\n" \
            "⚙️ Advanced: Extra tools"
     
-    markup = types.InlineKeyboardMarkup(row_width=2)  # Side by side for less scroll
+    markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         ("🛡️ Verify", 'verify'), ("👋 Welcome", 'welcome_menu'),
         ("📬 Triggers", 'triggers_menu'), ("⏰ Schedule", 'scheduled'),
         ("🔒 Moderation", 'group_menu'), ("🧹 Clean", 'autoclean'),
         ("🚫 Block", 'block'), ("🌐 Lang", 'lang'),
-        ("⚙️ Advanced", 'advanced_menu')
+        ("⚙️ Advanced", 'advanced_menu'), ("📋 Commands", 'show_commands')
     ]
     markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='show_commands'))  # Important back button single
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
-# GROUP MENU (ARRANGED, DESCRIPTIONS, NO SCROLL)
+# GROUP MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'group_menu')
 def group_menu(call):
-    if not is_creator(bot, str(call.message.chat.id), call.from_user.id):
-        return bot.edit_message_text("Creator only!", call.message.chat.id, call.message.message_id)
+    if not is_creator_or_admin(bot, str(call.message.chat.id), call.from_user.id):
+        return bot.edit_message_text("Creator or admin only!", call.message.chat.id, call.message.message_id)
     
     chat_id = str(call.message.chat.id)
     
@@ -451,7 +587,7 @@ def group_menu(call):
            "💾 Dump: Deleted msg logs\n" \
            "🔌 Plugins: Extra modules"
     
-    markup = types.InlineKeyboardMarkup(row_width=2)  # Side by side
+    markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         ("🔒 Locks", 'moderation_lock'), ("🛡️ CAPTCHA", 'moderation_captcha'),
         ("📊 Analytics", 'analytics_menu'), ("🎯 Triggers", 'triggers_menu'),
@@ -464,11 +600,10 @@ def group_menu(call):
         ("💾 Dump", 'dump_menu'), ("🔌 Plugins", 'plugins_menu')
     ]
     markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='main'))  # Single back
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
-# ANALYTICS MENU (FIXED, ARRANGED)
+# ANALYTICS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'analytics_menu')
 def analytics_menu(call):
     bot.answer_callback_query(call.id, "📊 Loading...")
@@ -483,10 +618,10 @@ def analytics_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
-        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month')
+        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
+        types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
-    markup.add(types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -500,14 +635,18 @@ def analytics_action(call):
     elif action == 'month':
         stats = get_analytics(chat_id, 'month')
     elif action == 'report':
-        # Simple report (expand as needed)
         stats = "📤 Report sent to logs (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='analytics_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
+        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
+        types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='analytics_menu')
+    )
     bot.edit_message_text(stats, chat_id, call.message.message_id, reply_markup=markup)
 
-# TRIGGERS MENU (FULL FIXED, 5 LEVELS, DESCRIPTIONS)
+# TRIGGERS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'triggers_menu')
 def triggers_menu(call):
     chat_id = str(call.message.chat.id)
@@ -521,13 +660,14 @@ def triggers_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Add", callback_data='triggers_add'),
-        types.InlineKeyboardButton("📝 List", callback_data='triggers_list')
-    )
-    markup.add(
+        types.InlineKeyboardButton("📝 List", callback_data='triggers_list'),
         types.InlineKeyboardButton("✏️ Edit", callback_data='triggers_edit'),
         types.InlineKeyboardButton("🗑️ Delete", callback_data='triggers_delete')
     )
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
+    )
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -544,34 +684,48 @@ def triggers_action(call):
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("📝 Keyword", callback_data='triggers_add_keyword'),
-            types.InlineKeyboardButton("⚡ Regex", callback_data='triggers_add_regex')
+            types.InlineKeyboardButton("⚡ Regex", callback_data='triggers_add_regex'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
         )
-        markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'))
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
     elif action in ['add_keyword', 'add_regex']:
-        bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': 1 if 'regex' in action else 0}
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'))
+        bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': 1 if 'regex' in action else 0, 'timeout': time.time() + 300}
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
+        )
         bot.edit_message_text("Send: keyword|response\nE.g., hello|Hi there!", chat_id, call.message.message_id, reply_markup=markup)
     
     elif action == 'list':
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT keyword, response FROM triggers WHERE chat_id=?", (chat_id,))
-        triggers = c.fetchall()
-        conn.close()
+        triggers = safe_db_operation("SELECT keyword, response FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
         text = "📝 TRIGGERS LIST:\n" + "\n".join(f"• {kw}: {resp}" for kw, resp in triggers) or "No triggers."
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'))
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("➕ Add", callback_data='triggers_add'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu')
+        )
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
     elif action == 'edit' or action == 'delete':
-        # Placeholder for edit/delete (similar to add, ask for keyword)
-        bot.temp_data[chat_id] = {'action': f'triggers_{action}'}
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'))
+        bot.temp_data[chat_id] = {'action': f'triggers_{action}', 'timeout': time.time() + 300}
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("📝 List", callback_data='triggers_list')
+        )
         bot.edit_message_text(f"Send keyword to {action}:", chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'help':
+        text = "🎯 Triggers Help:\n\n- Add: Create keyword or regex triggers\n- Edit/Delete: Modify or remove\n- Format: keyword|response"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("➕ Add", callback_data='triggers_add')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_triggers_add(message):
     chat_id = str(message.chat.id)
@@ -579,17 +733,23 @@ def handle_triggers_add(message):
     data = bot.temp_data[chat_id]
     try:
         kw, resp = message.text.split('|', 1)
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO triggers VALUES (?, ?, ?, ?)", (chat_id, kw.strip(), resp.strip(), data['regex']))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Trigger added!")
-    except:
-        bot.reply_to(message, "❌ Format: keyword|response")
+        kw = sanitize_input(kw.strip())
+        resp = sanitize_input(resp.strip())
+        if data['regex'] and not validate_regex(kw):
+            return bot.reply_to(message, "❌ Invalid regex pattern!")
+        if len(kw) > 100 or len(resp) > 1000:
+            return bot.reply_to(message, "❌ Keyword or response too long!")
+        if safe_db_operation("SELECT 1 FROM triggers WHERE chat_id=? AND keyword=?", (chat_id, kw), "fetch"):
+            return bot.reply_to(message, "❌ Trigger already exists!")
+        if safe_db_operation("INSERT INTO triggers VALUES (?, ?, ?, ?)", (chat_id, kw, resp, data['regex'])):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Trigger added!")
+        else:
+            bot.reply_to(message, "❌ Error adding trigger!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# WELCOME MENU (FULL FIXED)
+# WELCOME MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'welcome_menu')
 def welcome_menu(call):
     chat_id = str(call.message.chat.id)
@@ -602,10 +762,10 @@ def welcome_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("👋 Set Welcome", callback_data='welcome_set'),
-        types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview')
+        types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview'),
+        types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
-    markup.add(types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -613,9 +773,12 @@ def welcome_menu(call):
 def welcome_action(call):
     action = call.data
     chat_id = str(call.message.chat.id)
-    bot.temp_data[chat_id] = {'action': action}
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Cancel", callback_data='welcome_menu'))
+    bot.temp_data[chat_id] = {'action': action, 'timeout': time.time() + 300}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Cancel", callback_data='welcome_menu'),
+        types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview')
+    )
     bot.edit_message_text(f"Send new {'welcome' if 'welcome' in action else 'leave'} message:", chat_id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'welcome_preview')
@@ -623,25 +786,28 @@ def welcome_preview(call):
     chat_id = str(call.message.chat.id)
     welcome, leave = get_welcome(chat_id), get_welcome(chat_id, False)
     text = f"👋 Welcome: {welcome}\n🚪 Leave: {leave}"
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='welcome_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("👋 Set Welcome", callback_data='welcome_set'),
+        types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_welcome_set(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     action = bot.temp_data[chat_id]['action']
-    msg = message.text
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO welcome VALUES (?, ?, ?)", 
-              (chat_id, msg if 'welcome' in action else None, msg if 'leave' in action else None))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, "✅ Message set!")
+    msg = sanitize_input(message.text)
+    if len(msg) < 1:
+        return bot.reply_to(message, "❌ Message cannot be empty!")
+    if safe_db_operation("INSERT OR REPLACE INTO welcome VALUES (?, ?, ?)", 
+                       (chat_id, msg if 'welcome' in action else None, msg if 'leave' in action else None)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, "✅ Message set!")
+    else:
+        bot.reply_to(message, "❌ Error setting message!")
 
-# ANTI-FLOOD MENU (FULL FIXED)
+# ANTI-FLOOD MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'flood_menu')
 def flood_menu(call):
     chat_id = str(call.message.chat.id)
@@ -654,10 +820,10 @@ def flood_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🛡️ Enable", callback_data='flood_enable'),
-        types.InlineKeyboardButton("⚙️ Set Limit", callback_data='flood_limit')
+        types.InlineKeyboardButton("⚙️ Set Limit", callback_data='flood_limit'),
+        types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
-    markup.add(types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -667,31 +833,37 @@ def flood_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'enable':
-        # Toggle logic (placeholder, use settings table)
-        text = "🛡️ Flood protection toggled!"
+        bot.temp_data[chat_id] = {'action': 'flood_enable', 'timeout': time.time() + 300}
+        text = "🛡️ Send 'on' or 'off' to enable/disable flood protection:"
     elif action == 'limit':
-        bot.temp_data[chat_id] = {'action': 'flood_set_limit'}
+        bot.temp_data[chat_id] = {'action': 'flood_set_limit', 'timeout': time.time() + 300}
         text = "⚙️ Send new limit (e.g., 5):"
     elif action == 'stats':
         text = "📊 Flood stats: 0 incidents (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='flood_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='flood_menu'),
+        types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_flood_set_limit(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
-    limit = parse_number(message.text)
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO flood_settings VALUES (?, ?, ?)", (chat_id, limit, 'delete'))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, f"✅ Limit set to {limit}!")
+    try:
+        limit = parse_number(message.text)
+        if limit < 1 or limit > 50:
+            return bot.reply_to(message, "❌ Limit must be between 1 and 50!")
+        if safe_db_operation("INSERT OR REPLACE INTO flood_settings VALUES (?, ?, ?)", (chat_id, limit, 'delete')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, f"✅ Limit set to {limit}!")
+        else:
+            bot.reply_to(message, "❌ Error setting limit!")
+    except ValueError:
+        bot.reply_to(message, "❌ Invalid number!")
 
-# BROADCAST MENU (FULL FIXED)
+# BROADCAST MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'broadcast_menu')
 def broadcast_menu(call):
     chat_id = str(call.message.chat.id)
@@ -704,10 +876,10 @@ def broadcast_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send'),
-        types.InlineKeyboardButton("👥 Select Groups", callback_data='broadcast_groups')
+        types.InlineKeyboardButton("👥 Select Groups", callback_data='broadcast_groups'),
+        types.InlineKeyboardButton("📋 Preview", callback_data='broadcast_preview'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
-    markup.add(types.InlineKeyboardButton("📋 Preview", callback_data='broadcast_preview'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -717,32 +889,33 @@ def broadcast_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'send':
-        bot.temp_data[chat_id] = {'action': 'broadcast_send'}
+        bot.temp_data[chat_id] = {'action': 'broadcast_send', 'timeout': time.time() + 300}
         text = "📢 Send message to broadcast:"
     elif action == 'groups':
-        text = "👥 Selected groups: All (placeholder)."
+        bot.temp_data[chat_id] = {'action': 'broadcast_groups', 'timeout': time.time() + 300}
+        text = "👥 Send group IDs (comma-separated):"
     elif action == 'preview':
         text = "📋 Preview: Sample msg (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu'),
+        types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_broadcast_send(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
-    msg = message.text
-    # Broadcast logic (placeholder: send to chat)
-    bot.send_message(chat_id, f"Broadcast: {msg}")
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO broadcasts VALUES (?, ?, ?)", (chat_id, msg, 1))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, "✅ Broadcast sent!")
+    msg = sanitize_input(message.text)
+    if safe_db_operation("INSERT INTO broadcasts VALUES (?, ?, ?)", (chat_id, msg, 1)):
+        bot.send_message(chat_id, f"Broadcast: {msg}")
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, "✅ Broadcast sent!")
+    else:
+        bot.reply_to(message, "❌ Error sending broadcast!")
 
-# BLACKLIST MENU (FULL FIXED)
+# BLACKLIST MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'blacklist_menu')
 def blacklist_menu(call):
     chat_id = str(call.message.chat.id)
@@ -756,13 +929,14 @@ def blacklist_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Add Word", callback_data='blacklist_add_word'),
-        types.InlineKeyboardButton("⚡ Add Regex", callback_data='blacklist_add_regex')
-    )
-    markup.add(
+        types.InlineKeyboardButton("⚡ Add Regex", callback_data='blacklist_add_regex'),
         types.InlineKeyboardButton("📝 List", callback_data='blacklist_list'),
         types.InlineKeyboardButton("🗑️ Remove", callback_data='blacklist_remove')
     )
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'))
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='blacklist_help')
+    )
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -772,37 +946,45 @@ def blacklist_action(call):
     chat_id = str(call.message.chat.id)
     
     if action[0] == 'add' and action[1] in ['word', 'regex']:
-        bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 1 if 'regex' in action else 0}
+        bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 1 if 'regex' in action else 0, 'timeout': time.time() + 300}
         text = "➕ Send word/regex to add:"
     elif action[0] == 'list':
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT word FROM blacklists WHERE chat_id=?", (chat_id,))
-        words = c.fetchall()
-        conn.close()
+        words = safe_db_operation("SELECT word FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
         text = "📝 BLACKLIST:\n" + "\n".join(f"• {w[0]}" for w in words) or "No blacklists."
     elif action[0] == 'remove':
-        bot.temp_data[chat_id] = {'action': 'blacklist_remove'}
+        bot.temp_data[chat_id] = {'action': 'blacklist_remove', 'timeout': time.time() + 300}
         text = "🗑️ Send word to remove:"
+    elif action[0] == 'help':
+        text = "🚫 Blacklist Help:\n\n- Add: Block specific words or regex\n- Remove: Unblock words\n- Case-insensitive"
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='blacklist_list')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_blacklist_add(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     data = bot.temp_data[chat_id]
-    word = message.text
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO blacklists VALUES (?, ?, ?)", (chat_id, word, data['regex']))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, "✅ Blacklist added!")
+    word = sanitize_input(message.text)
+    try:
+        if data['regex'] and not validate_regex(word):
+            return bot.reply_to(message, "❌ Invalid regex pattern!")
+        if len(word) > 100:
+            return bot.reply_to(message, "❌ Word too long!")
+        if safe_db_operation("SELECT 1 FROM blacklists WHERE chat_id=? AND word=?", (chat_id, word), "fetch"):
+            return bot.reply_to(message, "❌ Word already blacklisted!")
+        if safe_db_operation("INSERT INTO blacklists VALUES (?, ?, ?)", (chat_id, word, data['regex'])):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Blacklist added!")
+        else:
+            bot.reply_to(message, "❌ Error adding blacklist!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# ADVANCED MENU (ARRANGED, DESCRIPTIONS)
+# ADVANCED MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'advanced_menu')
 def advanced_menu(call):
     chat_id = str(call.message.chat.id)
@@ -821,23 +1003,17 @@ def advanced_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
-        ("👑 Permissions", 'permissions_menu'),
-        ("⚙️ Custom Cmds", 'customcmd_menu'),
-        ("📊 Polls", 'polls_menu'),
-        ("📝 Notes", 'notes_menu'),
-        ("📰 RSS", 'rss_menu'),
-        ("💰 Subscriptions", 'subs_menu'),
-        ("🔗 Federation", 'fed_menu'),
-        ("🎲 Captcha Types", 'captcha_menu'),
-        ("💾 Message Dump", 'dump_menu'),
-        ("🔌 Plugins", 'plugins_menu')
+        ("👑 Permissions", 'permissions_menu'), ("⚙️ Custom Cmds", 'customcmd_menu'),
+        ("📊 Polls", 'polls_menu'), ("📝 Notes", 'notes_menu'),
+        ("📰 RSS", 'rss_menu'), ("💰 Subscriptions", 'subs_menu'),
+        ("🔗 Federation", 'fed_menu'), ("🎲 Captcha Types", 'captcha_menu'),
+        ("💾 Message Dump", 'dump_menu'), ("🔌 Plugins", 'plugins_menu')
     ]
     markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='main'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
-# PERMISSIONS MENU (FULL FIXED, AS BEFORE)
+# PERMISSIONS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'permissions_menu')
 def permissions_menu(call):
     chat_id = str(call.message.chat.id)
@@ -851,13 +1027,14 @@ def permissions_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("👑 Grant Role", callback_data='perm_grant'),
-        types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list')
-    )
-    markup.add(
+        types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list'),
         types.InlineKeyboardButton("⚙️ Set Commands", callback_data='perm_commands'),
         types.InlineKeyboardButton("⏰ Set Duration", callback_data='perm_duration')
     )
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='perm_help')
+    )
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -874,40 +1051,54 @@ def permissions_action(call):
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
             types.InlineKeyboardButton("Mod", callback_data='perm_grant_mod'),
-            types.InlineKeyboardButton("Admin", callback_data='perm_grant_admin')
+            types.InlineKeyboardButton("Admin", callback_data='perm_grant_admin'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'),
+            types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list')
         )
-        markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'))
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
     elif action[0] == 'grant' and action[1] in ['mod', 'admin']:
         role = action[1].upper()
-        bot.temp_data[chat_id] = {'action': 'grant_role', 'role': role}
+        bot.temp_data[chat_id] = {'action': 'grant_role', 'role': role, 'timeout': time.time() + 300}
         
         text = f"👑 Grant {role} Role\n\n" \
                "Send User ID or @username.\n" \
                "Or reply to their message."
         
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='perm_grant'))
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='perm_grant'),
+            types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list')
+        )
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
     elif action[0] == 'list':
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT user_id, role, duration FROM permissions WHERE chat_id=?", (chat_id,))
-        rows = c.fetchall()
-        conn.close()
-        
+        rows = safe_db_operation("SELECT user_id, role, duration FROM permissions WHERE chat_id=?", (chat_id,), "fetch")
         text = "📋 ROLES:\n" + "\n".join(f"• ID {uid}: {role} ({dur})" for uid, role, dur in rows) or "No roles."
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'))
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("👑 Grant Role", callback_data='perm_grant'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu')
+        )
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
     elif action[0] == 'commands' or action[0] == 'duration':
-        bot.temp_data[chat_id] = {'action': f'perm_{action[0]}'}
+        bot.temp_data[chat_id] = {'action': f'perm_{action[0]}', 'timeout': time.time() + 300}
         text = f"Send {'commands (comma sep)' if action[0] == 'commands' else 'duration (e.g., 1d)'} for role:"
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'))
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'),
+            types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action[0] == 'help':
+        text = "👑 Permissions Help:\n\n- Grant: Assign mod/admin roles\n- Commands: Set allowed commands\n- Duration: Time-limited roles"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'),
+            types.InlineKeyboardButton("👑 Grant Role", callback_data='perm_grant')
+        )
         bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_grant_input(message):
@@ -920,23 +1111,22 @@ def handle_grant_input(message):
         user_id = str(message.reply_to_message.from_user.id)
         user_name = message.reply_to_message.from_user.first_name
     else:
-        user_id = message.text.replace('@', '')
+        user_id = sanitize_input(message.text.replace('@', ''))
         user_name = "User"
     
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO permissions VALUES (?, ?, ?, ?, ?)', 
-              (chat_id, user_id, role, 'all', 'permanent'))
-    conn.commit()
-    conn.close()
-    
-    del bot.temp_data[chat_id]
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list'))
-    bot.reply_to(message, f"✅ {role} granted to {user_name} (ID: {user_id})!")
+    if safe_db_operation('INSERT OR REPLACE INTO permissions VALUES (?, ?, ?, ?, ?)', 
+                       (chat_id, user_id, role, 'all', 'permanent')):
+        del bot.temp_data[chat_id]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📋 List Roles", callback_data='perm_list'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu')
+        )
+        bot.reply_to(message, f"✅ {role} granted to {user_name} (ID: {user_id})!", reply_markup=markup)
+    else:
+        bot.reply_to(message, "❌ Error granting role!")
 
-# CUSTOM COMMANDS MENU (FULL FIXED)
+# CUSTOM COMMANDS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'customcmd_menu')
 def customcmd_menu(call):
     chat_id = str(call.message.chat.id)
@@ -949,10 +1139,10 @@ def customcmd_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Create", callback_data='cmd_create'),
-        types.InlineKeyboardButton("📝 List", callback_data='cmd_list')
+        types.InlineKeyboardButton("📝 List", callback_data='cmd_list'),
+        types.InlineKeyboardButton("✏️ Edit", callback_data='cmd_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("✏️ Edit", callback_data='cmd_edit'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -962,21 +1152,20 @@ def customcmd_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'create':
-        bot.temp_data[chat_id] = {'action': 'customcmd_create'}
+        bot.temp_data[chat_id] = {'action': 'customcmd_create', 'timeout': time.time() + 300}
         text = "➕ Send: /trigger|response"
     elif action == 'list':
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,))
-        cmds = c.fetchall()
-        conn.close()
+        cmds = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
         text = "📝 COMMANDS:\n" + "\n".join(f"• /{t}: {r}" for t, r in cmds) or "No commands."
     elif action == 'edit':
-        bot.temp_data[chat_id] = {'action': 'customcmd_edit'}
+        bot.temp_data[chat_id] = {'action': 'customcmd_edit', 'timeout': time.time() + 300}
         text = "✏️ Send trigger to edit:"
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu'),
+        types.InlineKeyboardButton("➕ Create", callback_data='cmd_create')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_customcmd_create(message):
@@ -984,18 +1173,21 @@ def handle_customcmd_create(message):
     if chat_id not in bot.temp_data: return
     try:
         trig, resp = message.text.split('|', 1)
-        trig = trig.strip('/ ')
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", (chat_id, trig, resp.strip(), 'all', 'all'))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Custom command added!")
-    except:
-        bot.reply_to(message, "❌ Format: /trigger|response")
+        trig = sanitize_input(trig.strip('/ '))
+        resp = sanitize_input(resp.strip())
+        if len(trig) > 50 or len(resp) > 1000:
+            return bot.reply_to(message, "❌ Trigger or response too long!")
+        if safe_db_operation("SELECT 1 FROM custom_commands WHERE chat_id=? AND trigger=?", (chat_id, trig), "fetch"):
+            return bot.reply_to(message, "❌ Command already exists!")
+        if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", (chat_id, trig, resp, 'all', 'all')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Custom command added!")
+        else:
+            bot.reply_to(message, "❌ Error adding command!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# POLLS MENU (FULL FIXED)
+# POLLS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'polls_menu')
 def polls_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1008,10 +1200,10 @@ def polls_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📊 New Poll", callback_data='poll_new'),
-        types.InlineKeyboardButton("⚙️ Settings", callback_data='poll_settings')
+        types.InlineKeyboardButton("⚙️ Settings", callback_data='poll_settings'),
+        types.InlineKeyboardButton("📋 Active", callback_data='poll_active'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("📋 Active", callback_data='poll_active'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1021,15 +1213,18 @@ def polls_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'new':
-        bot.temp_data[chat_id] = {'action': 'poll_new'}
+        bot.temp_data[chat_id] = {'action': 'poll_new', 'timeout': time.time() + 300}
         text = "📊 Send: question|option1,option2|anonymous(0/1)|timer(min)"
     elif action == 'settings':
         text = "⚙️ Poll settings updated (placeholder)."
     elif action == 'active':
         text = "📋 Active polls: None (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'),
+        types.InlineKeyboardButton("📊 New Poll", callback_data='poll_new')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_poll_new(message):
@@ -1037,19 +1232,23 @@ def handle_poll_new(message):
     if chat_id not in bot.temp_data: return
     try:
         q, opts, anon, timer = message.text.split('|')
+        q = sanitize_input(q.strip())
+        opts = sanitize_input(opts.strip())
+        anon = int(anon)
+        timer = int(timer)
+        if anon not in [0, 1] or timer < 1:
+            return bot.reply_to(message, "❌ Invalid anonymous or timer value!")
         poll_id = str(random.randint(1000, 9999))
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                  (chat_id, poll_id, q.strip(), opts, int(anon), int(timer), '{}'))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, f"✅ Poll {poll_id} created!")
-    except:
-        bot.reply_to(message, "❌ Format error.")
+        if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                           (chat_id, poll_id, q, opts, anon, timer, '{}')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, f"✅ Poll {poll_id} created!")
+        else:
+            bot.reply_to(message, "❌ Error creating poll!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# NOTES MENU (FULL FIXED)
+# NOTES MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'notes_menu')
 def notes_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1062,10 +1261,10 @@ def notes_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Save Note", callback_data='note_save'),
-        types.InlineKeyboardButton("🔍 Search", callback_data='note_search')
+        types.InlineKeyboardButton("🔍 Search", callback_data='note_search'),
+        types.InlineKeyboardButton("📤 Share", callback_data='note_share'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("📤 Share", callback_data='note_share'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1075,16 +1274,19 @@ def notes_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'save':
-        bot.temp_data[chat_id] = {'action': 'note_save'}
+        bot.temp_data[chat_id] = {'action': 'note_save', 'timeout': time.time() + 300}
         text = "➕ Send: #tag|content|expire(1d)"
     elif action == 'search':
-        bot.temp_data[chat_id] = {'action': 'note_search'}
+        bot.temp_data[chat_id] = {'action': 'note_search', 'timeout': time.time() + 300}
         text = "🔍 Send tag to search:"
     elif action == 'share':
         text = "📤 Note shared (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu'),
+        types.InlineKeyboardButton("➕ Save Note", callback_data='note_save')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_note_save(message):
@@ -1092,17 +1294,20 @@ def handle_note_save(message):
     if chat_id not in bot.temp_data: return
     try:
         tag, content, expire = message.text.split('|')
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO notes VALUES (?, ?, ?, ?)", (chat_id, tag.strip('# '), content.strip(), expire.strip()))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Note saved!")
-    except:
-        bot.reply_to(message, "❌ Format error.")
+        tag = sanitize_input(tag.strip('# '))
+        content = sanitize_input(content.strip())
+        expire = sanitize_input(expire.strip())
+        if not validate_time_format(expire):
+            return bot.reply_to(message, "❌ Invalid expire format (e.g., 1d)!")
+        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", (chat_id, tag, content, expire)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Note saved!")
+        else:
+            bot.reply_to(message, "❌ Error saving note!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# RSS MENU (FULL FIXED)
+# RSS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'rss_menu')
 def rss_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1115,10 +1320,10 @@ def rss_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Add Feed", callback_data='rss_add'),
-        types.InlineKeyboardButton("📝 List", callback_data='rss_list')
+        types.InlineKeyboardButton("📝 List", callback_data='rss_list'),
+        types.InlineKeyboardButton("✏️ Edit", callback_data='rss_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("✏️ Edit", callback_data='rss_edit'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1128,15 +1333,18 @@ def rss_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'add':
-        bot.temp_data[chat_id] = {'action': 'rss_add'}
+        bot.temp_data[chat_id] = {'action': 'rss_add', 'timeout': time.time() + 300}
         text = "➕ Send: url|keywords|interval(1h)|format"
     elif action == 'list':
         text = "📝 RSS feeds: None (placeholder)."
     elif action == 'edit':
         text = "✏️ Edit feed (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu'),
+        types.InlineKeyboardButton("➕ Add Feed", callback_data='rss_add')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_rss_add(message):
@@ -1144,17 +1352,23 @@ def handle_rss_add(message):
     if chat_id not in bot.temp_data: return
     try:
         url, kw, interval, fmt = message.text.split('|')
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", (chat_id, url.strip(), kw.strip(), interval.strip(), fmt.strip()))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ RSS added!")
-    except:
-        bot.reply_to(message, "❌ Format error.")
+        url = sanitize_input(url.strip())
+        kw = sanitize_input(kw.strip())
+        interval = sanitize_input(interval.strip())
+        fmt = sanitize_input(fmt.strip())
+        if not validate_url(url):
+            return bot.reply_to(message, "❌ Invalid URL!")
+        if not validate_time_format(interval):
+            return bot.reply_to(message, "❌ Invalid interval format (e.g., 1h)!")
+        if safe_db_operation("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", (chat_id, url, kw, interval, fmt)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ RSS added!")
+        else:
+            bot.reply_to(message, "❌ Error adding RSS!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# SUBSCRIPTIONS MENU (FULL FIXED)
+# SUBSCRIPTIONS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'subs_menu')
 def subs_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1167,10 +1381,10 @@ def subs_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Grant Plan", callback_data='sub_grant'),
-        types.InlineKeyboardButton("📝 List", callback_data='sub_list')
+        types.InlineKeyboardButton("📝 List", callback_data='sub_list'),
+        types.InlineKeyboardButton("✏️ Edit", callback_data='sub_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("✏️ Edit", callback_data='sub_edit'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1180,15 +1394,18 @@ def subs_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'grant':
-        bot.temp_data[chat_id] = {'action': 'sub_grant'}
+        bot.temp_data[chat_id] = {'action': 'sub_grant', 'timeout': time.time() + 300}
         text = "➕ Send: user_id|plan|duration(1m)"
     elif action == 'list':
         text = "📝 Subs: None (placeholder)."
     elif action == 'edit':
         text = "✏️ Edit sub (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu'),
+        types.InlineKeyboardButton("➕ Grant Plan", callback_data='sub_grant')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_sub_grant(message):
@@ -1196,17 +1413,20 @@ def handle_sub_grant(message):
     if chat_id not in bot.temp_data: return
     try:
         uid, plan, dur = message.text.split('|')
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", (chat_id, uid.strip(), plan.strip(), dur.strip(), 1))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Subscription granted!")
-    except:
-        bot.reply_to(message, "❌ Format error.")
+        uid = sanitize_input(uid.strip())
+        plan = sanitize_input(plan.strip())
+        dur = sanitize_input(dur.strip())
+        if not validate_time_format(dur):
+            return bot.reply_to(message, "❌ Invalid duration format (e.g., 1m)!")
+        if safe_db_operation("INSERT INTO subscriptions VALUES (?, ?, ?, ?, ?)", (chat_id, uid, plan, dur, 1)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Subscription granted!")
+        else:
+            bot.reply_to(message, "❌ Error granting subscription!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# FEDERATION MENU (FULL FIXED)
+# FEDERATION MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'fed_menu')
 def fed_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1219,10 +1439,10 @@ def fed_menu(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🔗 Link Group", callback_data='fed_link'),
-        types.InlineKeyboardButton("📝 List", callback_data='fed_list')
+        types.InlineKeyboardButton("📝 List", callback_data='fed_list'),
+        types.InlineKeyboardButton("⚙️ Sync", callback_data='fed_sync'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("⚙️ Sync", callback_data='fed_sync'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1232,30 +1452,31 @@ def fed_action(call):
     chat_id = str(call.message.chat.id)
     
     if action == 'link':
-        bot.temp_data[chat_id] = {'action': 'fed_link'}
+        bot.temp_data[chat_id] = {'action': 'fed_link', 'timeout': time.time() + 300}
         text = "🔗 Send linked group ID:"
     elif action == 'list':
         text = "📝 Federations: None (placeholder)."
     elif action == 'sync':
         text = "⚙️ Sync settings updated (placeholder)."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu'),
+        types.InlineKeyboardButton("🔗 Link Group", callback_data='fed_link')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_fed_link(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
-    linked = message.text
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO federations VALUES (?, ?, ?, ?)", (chat_id, linked, 'all', 1))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, "✅ Group linked!")
+    linked = sanitize_input(message.text)
+    if safe_db_operation("INSERT INTO federations VALUES (?, ?, ?, ?)", (chat_id, linked, 'all', 1)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, "✅ Group linked!")
+    else:
+        bot.reply_to(message, "❌ Error linking group!")
 
-# CAPTCHA MENU (FULL FIXED)
+# CAPTCHA MENU (CONTINUED)
 @bot.callback_query_handler(func=lambda call: call.data == 'captcha_menu')
 def captcha_menu(call):
     chat_id = str(call.message.chat.id)
@@ -1263,15 +1484,18 @@ def captcha_menu(call):
     text = "🎲 CAPTCHA MENU\n\n" \
            "⚙️ Set Type: Math/text/image\n" \
            "📊 Difficulty: Easy/hard\n" \
-           "⏰ Time Limit: Fail timeout"
+           "⏰ Time Limit: Fail timeout\n" \
+           "🛑 Fail Action: Kick/mute"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("⚙️ Set Type", callback_data='captcha_set_type'),
-        types.InlineKeyboardButton("📊 Difficulty", callback_data='captcha_difficulty')
+        types.InlineKeyboardButton("📊 Difficulty", callback_data='captcha_difficulty'),
+        types.InlineKeyboardButton("⏰ Time Limit", callback_data='captcha_time'),
+        types.InlineKeyboardButton("🛑 Fail Action", callback_data='captcha_fail_action'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='captcha_help')
     )
-    markup.add(types.InlineKeyboardButton("⏰ Time Limit", callback_data='captcha_time'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1280,38 +1504,143 @@ def captcha_action(call):
     action = call.data.split('_')[1]
     chat_id = str(call.message.chat.id)
     
-    bot.temp_data[chat_id] = {'action': 'captcha_set'}
-    text = f"🎲 Send new {action}:"
+    if action == 'set_type':
+        text = "⚙️ Select CAPTCHA Type:\n\n" \
+               "🔢 Math: Simple equations\n" \
+               "📝 Text: Word-based\n" \
+               "🖼️ Image: Visual challenge"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔢 Math", callback_data='captcha_type_math'),
+            types.InlineKeyboardButton("📝 Text", callback_data='captcha_type_text'),
+            types.InlineKeyboardButton("🖼️ Image", callback_data='captcha_type_image'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'))
-    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    elif action == 'type_math' or action == 'type_text' or action == 'type_image':
+        captcha_type = action.split('_')[2]
+        bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': 'type', 'value': captcha_type, 'timeout': time.time() + 300}
+        text = f"✅ CAPTCHA type set to {captcha_type}. Set difficulty or save:"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📊 Difficulty", callback_data='captcha_difficulty'),
+            types.InlineKeyboardButton("💾 Save", callback_data='captcha_save'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='captcha_help')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'difficulty':
+        bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': 'difficulty', 'timeout': time.time() + 300}
+        text = "📊 Send difficulty (easy/medium/hard):"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("💾 Save", callback_data='captcha_save')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'time':
+        bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': 'time_limit', 'timeout': time.time() + 300}
+        text = "⏰ Send time limit (e.g., 5m):"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("💾 Save", callback_data='captcha_save')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'fail_action':
+        bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': 'fail_action', 'timeout': time.time() + 300}
+        text = "🛑 Send fail action (kick/mute):"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("💾 Save", callback_data='captcha_save')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'save':
+        if chat_id in bot.temp_data and 'captcha_config' in bot.temp_data[chat_id]:
+            config = bot.temp_data[chat_id]['captcha_config']
+            if safe_db_operation("INSERT OR REPLACE INTO captchas VALUES (?, ?, ?, ?, ?)", 
+                               (chat_id, config.get('type', 'math'), config.get('difficulty', 'easy'), 
+                                config.get('time_limit', 300), config.get('fail_action', 'kick'))):
+                del bot.temp_data[chat_id]
+                text = "✅ CAPTCHA settings saved!"
+            else:
+                text = "❌ Error saving CAPTCHA settings!"
+        else:
+            text = "❌ No CAPTCHA settings to save!"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("⚙️ Set Type", callback_data='captcha_set_type')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'help':
+        text = "🎲 CAPTCHA Help:\n\n- Set Type: Choose math/text/image\n- Difficulty: Easy/medium/hard\n- Time Limit: Fail timeout\n- Fail Action: Kick or mute"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+            types.InlineKeyboardButton("⚙️ Set Type", callback_data='captcha_set_type')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_captcha_set(message):
     chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    value = message.text
-    # Placeholder save
-    bot.reply_to(message, f"✅ Captcha set to {value}!")
-    del bot.temp_data[chat_id]
+    if chat_id not in bot.temp_data or 'sub_action' not in bot.temp_data[chat_id]:
+        return
+    sub_action = bot.temp_data[chat_id]['sub_action']
+    value = sanitize_input(message.text)
+    
+    if chat_id not in bot.temp_data:
+        bot.temp_data[chat_id] = {'action': 'captcha_set', 'captcha_config': {}}
+    bot.temp_data[chat_id]['captcha_config'] = bot.temp_data[chat_id].get('captcha_config', {})
+    
+    if sub_action == 'difficulty':
+        if value.lower() not in ['easy', 'medium', 'hard']:
+            return bot.reply_to(message, "❌ Invalid difficulty! Use easy/medium/hard.")
+        bot.temp_data[chat_id]['captcha_config']['difficulty'] = value.lower()
+    elif sub_action == 'time_limit':
+        if not validate_time_format(value):
+            return bot.reply_to(message, "❌ Invalid time format (e.g., 5m)!")
+        bot.temp_data[chat_id]['captcha_config']['time_limit'] = parse_time(value)
+    elif sub_action == 'fail_action':
+        if value.lower() not in ['kick', 'mute']:
+            return bot.reply_to(message, "❌ Invalid action! Use kick/mute.")
+        bot.temp_data[chat_id]['captcha_config']['fail_action'] = value.lower()
+    
+    text = f"✅ {sub_action.replace('_', ' ').title()} set to {value}. Save or continue:"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("💾 Save", callback_data='captcha_save'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu'),
+        types.InlineKeyboardButton("⚙️ Set Type", callback_data='captcha_set_type'),
+        types.InlineKeyboardButton("📊 Difficulty", callback_data='captcha_difficulty')
+    )
+    bot.send_message(chat_id, text, reply_markup=markup)
 
-# MESSAGE DUMP MENU (FULL FIXED)
+# MESSAGE DUMP MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'dump_menu')
 def dump_menu(call):
     chat_id = str(call.message.chat.id)
     
-    text = "💾 DUMP MENU\n\n" \
-           "⚙️ Set Channel: Dump deleted msgs\n" \
-           "📝 List: View dumps\n" \
-           "🗑️ Clear: Remove logs"
+    text = "💾 MESSAGE DUMP MENU\n\n" \
+           "🛑 Enable: Turn on/off\n" \
+           "📤 Channel: Set dump channel\n" \
+           "📝 View: See dumped messages"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("⚙️ Set Channel", callback_data='dump_set'),
-        types.InlineKeyboardButton("📝 List", callback_data='dump_list')
+        types.InlineKeyboardButton("🛑 Enable", callback_data='dump_enable'),
+        types.InlineKeyboardButton("📤 Channel", callback_data='dump_channel'),
+        types.InlineKeyboardButton("📝 View", callback_data='dump_view'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("🗑️ Clear", callback_data='dump_clear'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
@@ -1320,65 +1649,89 @@ def dump_action(call):
     action = call.data.split('_')[1]
     chat_id = str(call.message.chat.id)
     
-    if action == 'set':
-        bot.temp_data[chat_id] = {'action': 'dump_set'}
-        text = "💾 Send dump channel ID:"
-    elif action == 'list':
-        text = "📝 Dumps: None (placeholder)."
-    elif action == 'clear':
-        text = "🗑️ Dumps cleared (placeholder)."
+    if action == 'enable':
+        bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'enable', 'timeout': time.time() + 300}
+        text = "🛑 Send 'on' or 'off' to enable/disable message dump:"
+    elif action == 'channel':
+        bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'channel', 'timeout': time.time() + 300}
+        text = "📤 Send channel ID for message dump:"
+    elif action == 'view':
+        rows = safe_db_operation("SELECT deleted_msg, user_id, timestamp FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+        text = "📝 DUMPED MESSAGES:\n" + "\n".join(f"• {row[2]} by {row[1]}: {row[0]}" for row in rows) or "No dumped messages."
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu'),
+        types.InlineKeyboardButton("🛑 Enable", callback_data='dump_enable')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_dump_set(message):
     chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    channel = message.text
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO message_dump VALUES (?, ?, ?, ?, ?)", (chat_id, '', '', '', channel))
-    conn.commit()
-    conn.close()
-    del bot.temp_data[chat_id]
-    bot.reply_to(message, "✅ Dump channel set!")
+    if chat_id not in bot.temp_data or 'sub_action' not in bot.temp_data[chat_id]:
+        return
+    sub_action = bot.temp_data[chat_id]['sub_action']
+    value = sanitize_input(message.text)
+    
+    if sub_action == 'enable':
+        if value.lower() not in ['on', 'off']:
+            return bot.reply_to(message, "❌ Invalid input! Use 'on' or 'off'.")
+        if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'message_dump', 'status', ?)", 
+                           (chat_id, json.dumps({'status': value.lower()}))):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, f"✅ Message dump {'enabled' if value.lower() == 'on' else 'disabled'}!")
+        else:
+            bot.reply_to(message, "❌ Error updating dump settings!")
+    elif sub_action == 'channel':
+        if not value.startswith('-'):
+            return bot.reply_to(message, "❌ Invalid channel ID!")
+        if safe_db_operation("INSERT OR REPLACE INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, '', '', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), value)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Dump channel set!")
+        else:
+            bot.reply_to(message, "❌ Error setting dump channel!")
 
-# PLUGINS MENU (FULL FIXED)
+# PLUGINS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'plugins_menu')
 def plugins_menu(call):
     chat_id = str(call.message.chat.id)
     
     text = "🔌 PLUGINS MENU\n\n" \
-           "➕ Install: Add plugin\n" \
+           "➕ Install: Add new plugin\n" \
            "📝 List: View plugins\n" \
-           "🗑️ Remove: Uninstall"
+           "⚙️ Config: Plugin settings"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("➕ Install", callback_data='plugin_install'),
-        types.InlineKeyboardButton("📝 List", callback_data='plugin_list')
+        types.InlineKeyboardButton("📝 List", callback_data='plugin_list'),
+        types.InlineKeyboardButton("⚙️ Config", callback_data='plugin_config'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
     )
-    markup.add(types.InlineKeyboardButton("🗑️ Remove", callback_data='plugin_remove'))
-    markup.row(types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu'))
     
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('plugin_'))
-def plugin_action(call):
+def plugins_action(call):
     action = call.data.split('_')[1]
     chat_id = str(call.message.chat.id)
     
     if action == 'install':
-        bot.temp_data[chat_id] = {'action': 'plugin_install'}
-        text = "➕ Send plugin name|config"
+        bot.temp_data[chat_id] = {'action': 'plugin_install', 'timeout': time.time() + 300}
+        text = "➕ Send plugin name and config (name|config):"
     elif action == 'list':
-        text = "📝 Plugins: None (placeholder)."
-    elif action == 'remove':
-        text = "🗑️ Plugin removed (placeholder)."
+        rows = safe_db_operation("SELECT plugin_name, config FROM plugins WHERE chat_id=?", (chat_id,), "fetch")
+        text = "📝 PLUGINS:\n" + "\n".join(f"• {row[0]}: {row[1]}" for row in rows) or "No plugins."
+    elif action == 'config':
+        bot.temp_data[chat_id] = {'action': 'plugin_config', 'timeout': time.time() + 300}
+        text = "⚙️ Send plugin name to configure:"
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu'))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu'),
+        types.InlineKeyboardButton("➕ Install", callback_data='plugin_install')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_plugin_install(message):
@@ -1386,83 +1739,103 @@ def handle_plugin_install(message):
     if chat_id not in bot.temp_data: return
     try:
         name, config = message.text.split('|')
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute("INSERT INTO plugins VALUES (?, ?, ?, ?)", (chat_id, name.strip(), config.strip(), 1))
-        conn.commit()
-        conn.close()
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, "✅ Plugin installed!")
-    except:
-        bot.reply_to(message, "❌ Format error.")
+        name = sanitize_input(name.strip())
+        config = sanitize_input(config.strip())
+        if safe_db_operation("INSERT INTO plugins VALUES (?, ?, ?, ?)", (chat_id, name, config, 1)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, "✅ Plugin installed!")
+        else:
+            bot.reply_to(message, "❌ Error installing plugin!")
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
 
-# COMMANDS LIST (FIXED)
+# MODERATION LOCKS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'moderation_lock')
+def moderation_lock_menu(call):
+    chat_id = str(call.message.chat.id)
+    settings = get_all_settings(chat_id)
+    
+    text = "🔒 MODERATION LOCKS\n\n" \
+           f"🔗 Links: {'✅' if safe_json(settings.get('moderation_lock_links', '{}'))['status'] == 'on' else '❌'}\n" \
+           f"📸 Media: {'✅' if safe_json(settings.get('moderation_lock_media', '{}'))['status'] == 'on' else '❌'}\n" \
+           f"😀 Stickers: {'✅' if safe_json(settings.get('moderation_lock_stickers', '{}'))['status'] == 'on' else '❌'}\n" \
+           f"📤 Forwards: {'✅' if safe_json(settings.get('moderation_lock_forwards', '{}'))['status'] == 'on' else '❌'}"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔗 Links", callback_data='lock_links'),
+        types.InlineKeyboardButton("📸 Media", callback_data='lock_media'),
+        types.InlineKeyboardButton("😀 Stickers", callback_data='lock_stickers'),
+        types.InlineKeyboardButton("📤 Forwards", callback_data='lock_forwards'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='lock_help')
+    )
+    
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lock_'))
+def lock_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    bot.temp_data[chat_id] = {'action': f'lock_{action}', 'timeout': time.time() + 300}
+    text = f"🔒 Send 'on' or 'off' to {'enable' if action == 'links' else 'restrict'} {action}:"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_lock'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='lock_help')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.chat.id in bot.temp_data and bot.temp_data[str(message.chat.id)].get('action', '').startswith('lock_'))
+def handle_lock_set(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    action = bot.temp_data[chat_id]['action'].split('_')[1]
+    value = sanitize_input(message.text).lower()
+    
+    if value not in ['on', 'off']:
+        return bot.reply_to(message, "❌ Invalid input! Use 'on' or 'off'.")
+    
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
+                       (chat_id, 'moderation', f'lock_{action}', json.dumps({'status': value}))):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, f"✅ {action.capitalize()} lock {'enabled' if value == 'on' else 'disabled'}!")
+    else:
+        bot.reply_to(message, f"❌ Error setting {action} lock!")
+
+# SHOW COMMANDS
 @bot.callback_query_handler(func=lambda call: call.data == 'show_commands')
 def show_commands(call):
-    commands = """📋 ALL COMMANDS:
-/start - Begin
-/status - Settings
-/ban @user - Ban
-/mute @user - Mute
-/lock links - Lock content
-/analytics - Stats
-/trigger add - Auto-reply
-/welcome set - Greetings
-Advanced: /perm, /cmd, /poll, /note, /rss, /sub, /fed, /dump, /plugin"""
+    chat_id = str(call.message.chat.id)
     
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("⬅️ Menu", callback_data='main'))
-    bot.edit_message_text(commands, str(call.message.chat.id), call.message.message_id, reply_markup=markup)
-
-# ORIGINAL MODERATION (FIXED, NO DELETE_PREVIOUS)
-@bot.message_handler(commands=['ban', 'mute', 'kick', 'warn'])
-def moderation_penalties(message):
-    chat_id = str(message.chat.id)
-    if not message.reply_to_message: return
-    user_id = str(message.reply_to_message.from_user.id)
-    command = message.text.split()[0][1:].lower()
+    text = "📋 AVAILABLE COMMANDS\n\n" \
+           "/start - Start bot\n" \
+           "/status - Group settings\n" \
+           "/warn @user reason - Warn user\n" \
+           "/unwarn @user - Remove warn\n" \
+           "/ban @user reason - Ban user\n" \
+           "/unban @user - Unban user\n" \
+           "/mute @user time reason - Mute user\n" \
+           "/unmute @user - Unmute user\n" \
+           "/settings - Open settings"
     
-    if command == 'ban':
-    bot.kick_chat_member(chat_id, user_id)
-    bot.reply_to(message, f"User banned!")
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔧 Settings", callback_data='main'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
-# MUTE, KICK, WARN - FULL ADDED!
-elif command == 'mute':
-    bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False})
-    bot.reply_to(message, f"User muted!")
-elif command == 'kick':
-    bot.kick_chat_member(chat_id, user_id)
-    bot.unban_chat_member(chat_id, user_id)  # Re-add after kick
-    bot.reply_to(message, f"User kicked!")
-elif command == 'warn':
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO warns VALUES (?, ?, ?, ?, ?)", 
-              (chat_id, user_id, 1, "Warning", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, f"User warned! (1/3)")
-
-# WEBHOOK SETUP (VERCEL FIXED)
-@app.before_first_request
-def setup_webhook():
-    webhook_url = f"https://{os.environ.get('VERCEL_URL')}/{TOKEN}"
-    bot.remove_webhook()
-    bot.set_webhook(url=webhook_url)
-    logging.info(f"Webhook set to: {webhook_url}")
-
-@app.route('/')
-def home():
-    return "🚀 ULTIMATE ADVANCED BOT LIVE ON VERCEL!"
-
-@app.route(f'/{TOKEN}', methods=['POST'])
+# WEBHOOK SETUP
+@app.route('/webhook', methods=['POST'])
 def webhook():
-    logging.info("Webhook received")
-    if request.headers.get('content-type') == 'application/json':
-        update = telebot.types.Update.de_json(request.get_data().decode('utf-8'))
-        bot.process_new_updates([update])
-    return 'OK', 200
+    update = telebot.types.Update.de_json(request.get_json())
+    bot.process_new_updates([update])
+    return '', 200
 
 if __name__ == '__main__':
-    setup_webhook()
-    print("Bot ready! Deploying to Vercel...")
+    bot.remove_webhook()
+    bot.set_webhook(url='https://your-domain.com/webhook')
+    app.run(host='0.0.0.0', port=5000)
