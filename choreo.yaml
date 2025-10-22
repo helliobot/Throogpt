@@ -1,0 +1,40 @@
+version: 0.1
+name: telegram-bot
+type: WebApplication
+source:
+  type: Dockerfile
+  location: .
+port: 5000
+build:
+  dockerfile: Dockerfile
+  context: .
+environment:
+  - name: BOT_TOKEN
+    description: Telegram Bot Token
+    required: true
+  - name: TURSO_DATABASE_URL
+    description: Turso Database URL
+    required: true
+  - name: TURSO_AUTH_TOKEN
+    description: Turso Auth Token
+    required: true
+  - name: WEBHOOK_URL
+    description: Webhook URL for Telegram
+    required: true
+  - name: PORT
+    description: Port for Flask server
+    default: "5000"
+    required: true
+healthCheck:
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 5000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 5000
+    initialDelaySeconds: 5
+    periodSeconds: 10
