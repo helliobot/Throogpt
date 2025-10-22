@@ -1,5 +1,4 @@
-python-telegram-bot==20.7
-libsql==0.3.2
-flask==2.3.3
-requests==2.31.0
+Flask==2.3.3
+pyTelegramBotAPI==4.22.1
 python-dotenv==1.0.1
+libsql-client==0.1.0
