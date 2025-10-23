@@ -4,14 +4,14 @@ components:
     type: service
     build:
       git:
-        url: https://helliobot.github.io/Throogpt/
+        url: https://github.com/helliobot/Throogpt.git  # https://helliobot.github.io/Throogpt/ से संबंधित GitHub repo URL जोड़ा गया (अगर repo URL अलग है, तो बदलें)
         branch: main
         path: /
     runtime: python
     process: worker
     envVars:
       - name: BOT_TOKEN
-        value: ""  # Choreo डैशबोर्ड में मान जोड़ें
+        value: ""  # Choreo डैशबोर्ड में BOT_TOKEN जोड़ें
     volumeMounts:
       - name: bot-data
         mountPath: /app/data
