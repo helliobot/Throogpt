@@ -22,6 +22,9 @@ logging.basicConfig(
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
+if not TOKEN:
+    logging.error("❌ BOT_TOKEN not found! Check your Choreo Environment Variables.")
+    exit()
 bot = telebot.TeleBot(TOKEN)
 
 # Global locks and caches
