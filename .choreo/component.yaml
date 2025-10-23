@@ -5,14 +5,20 @@ components:
     build:
       git:
         url: https://helliobot.github.io/Throogpt/
+        branch: main
         path: /
     runtime: python
     process: worker
     envVars:
       - name: BOT_TOKEN
+        value: ""  # Choreo डैशबोर्ड में मान जोड़ें
     volumeMounts:
-      - name: data
+      - name: bot-data
         mountPath: /app/data
     resources:
-      memory: 512Mi
-      cpu: 500m
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 250m
