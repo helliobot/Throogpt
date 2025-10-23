@@ -611,14 +611,30 @@ def get_all_settings(chat_id):
     if chat_id in MENU_CACHE: 
         return MENU_CACHE[chat_id]
     settings = {}
-    rows = safe_db_operation("SELECT feature, subfeature, data FROM settings WHERE chat_id=?", (chat_id,), "fetch")
-    if rows:
-        settings = {f"{r[0]}_{r[1]}": json.loads(r[2]) for r in rows}
-    MENU_CACHE[chat_id] = settings
+    try:
+        rows = safe_db_operation("SELECT feature, subfeature, data FROM settings WHERE chat_id=?", (chat_id,), "fetch")
+        if rows:
+            for row in rows:
+                try:
+                    settings[f"{row[0]}_{row[1]}"] = json.loads(row[2]) if row[2] else {'status': 'off'}
+                except json.JSONDecodeError as e:
+                    logging.error(f"JSON decode error for settings {row[0]}_{row[1]}: {e}")
+                    settings[f"{row[0]}_{row[1]}"] = {'status': 'off'}
+        MENU_CACHE[chat_id] = settings
+    except Exception as e:
+        logging.error(f"Error fetching settings for chat {chat_id}: {e}")
     return settings
 
-def safe_json(data): 
-    return json.loads(data) if data else {'status': 'off'}
+def safe_json(data):
+    try:
+        parsed = json.loads(data) if data else {'status': 'off'}
+        if not isinstance(parsed, dict):
+            logging.error(f"Invalid JSON data, expected dict, got {type(parsed)}")
+            return {'status': 'off'}
+        return parsed if 'status' in parsed else {**parsed, 'status': 'off'}
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON decode error: {e}")
+        return {'status': 'off'}
 
 def cleanup_temp_data():
     now = time.time()
@@ -759,7 +775,8 @@ def status_command(message):
     }
     
     for key, name in checks.items():
-        status = safe_json(settings.get(key, '{}'))['status']
+        status_data = safe_json(settings.get(key, '{}'))
+        status = status_data.get('status', 'off')
         status_text += f"{name}: {'✅' if status == 'on' else '❌'}\n"
     
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -801,7 +818,8 @@ def content_handler(message):
     
     # Save message to dump if enabled
     settings = get_all_settings(chat_id)
-    if safe_json(settings.get('message_dump', '{}'))['status'] == 'on':
+    dump_settings = safe_json(settings.get('message_dump', '{}'))
+    if dump_settings.get('status', 'off') == 'on':
         rows = safe_db_operation("SELECT dump_channel FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
         if rows:
             safe_db_operation("INSERT INTO message_dump VALUES (?, ?, ?, ?, ?)", 
@@ -841,12 +859,14 @@ def content_handler(message):
         return
     
     # ORIGINAL LOCKS
-    if message.entities and any(e.type == 'url' for e in message.entities) and safe_json(settings.get('moderation_lock_links', '{}'))['status'] == 'on':
-        bot.delete_message(chat_id, message.message_id)
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('lock_set', chat_id, action='Links', status='enabled'))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        return
+    if message.entities and any(e.type == 'url' for e in message.entities):
+        lock_links = safe_json(settings.get('moderation_lock_links', '{}'))
+        if lock_links.get('status', 'off') == 'on':
+            bot.delete_message(chat_id, message.message_id)
+            delete_previous_reply(chat_id)
+            sent_message = bot.reply_to(message, translate('lock_set', chat_id, action='Links', status='enabled'))
+            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+            return
     
     # HANDLE TEMP DATA INPUTS
     if chat_id in bot.temp_data:
@@ -1292,11 +1312,8 @@ def handle_customcmd_create(message):
         else:
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    except ValueError:
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('command_too_long', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+            bot.temp_data[f"last_reply_{chat_id}"] =
+            sent_message.message_id
 
 def handle_poll_new(message):
     chat_id = str(message.chat.id)
@@ -1308,13 +1325,19 @@ def handle_poll_new(message):
     if chat_id not in bot.temp_data:
         return
     try:
-        question, options, anon, timer = message.text.split('|')
-        options = options.split(',')
-        anon = 1 if anon.lower() == 'true' else 0
-        timer = parse_time(timer) if validate_time_format(timer) else 86400
+        parts = message.text.split('|')
+        question = sanitize_input(parts[0].strip())
+        options = [sanitize_input(opt.strip()) for opt in parts[1].split(',')]
+        anonymous = 1 if parts[2].strip().lower() == 'true' else 0
+        timer = parse_time(parts[3].strip()) if len(parts) > 3 else 0
+        if len(options) < 2 or len(question) > 255:
+            delete_previous_reply(chat_id)
+            sent_message = bot.reply_to(message, translate('poll_invalid', chat_id))
+            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+            return
         poll_id = str(random.randint(1000, 9999))
         if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                           (chat_id, poll_id, question, json.dumps(options), anon, timer, json.dumps({}))):
+                           (chat_id, poll_id, question, json.dumps(options), anonymous, timer, json.dumps({}))):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('poll_created', chat_id, poll_id=poll_id))
@@ -1328,7 +1351,6 @@ def handle_poll_new(message):
         sent_message = bot.reply_to(message, translate('poll_invalid', chat_id))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
-# Continuing from handle_note_save
 def handle_note_save(message):
     chat_id = str(message.chat.id)
     if not is_creator_or_admin(bot, chat_id, message.from_user.id):
@@ -1339,15 +1361,17 @@ def handle_note_save(message):
     if chat_id not in bot.temp_data:
         return
     try:
-        tag, content, expire = message.text.split('|')
+        tag, content = message.text.split('|', 1)
         tag = sanitize_input(tag.strip())
         content = sanitize_input(content.strip())
-        if not validate_time_format(expire):
+        expire = bot.temp_data[chat_id].get('expire', '0')
+        if expire != '0' and not validate_time_format(expire):
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('note_invalid_expire', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", (chat_id, tag, content, expire)):
+        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", 
+                           (chat_id, tag, content, expire)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('note_saved', chat_id))
@@ -1358,28 +1382,30 @@ def handle_note_save(message):
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     except ValueError:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('note_invalid_expire', chat_id))
+        sent_message = bot.reply_to(message, translate('note_saved', chat_id).replace("saved", "error saving"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_note_share(message):
     chat_id = str(message.chat.id)
-    if not is_creator_or_admin(bot, chat_id, message.from_user.id):
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('admin_only', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        return
-    if chat_id not in bot.temp_data:
-        return
     tag = sanitize_input(message.text)
-    rows = safe_db_operation("SELECT content FROM notes WHERE chat_id=? AND tag=?", (chat_id, tag), "fetch")
+    rows = safe_db_operation("SELECT content, expire FROM notes WHERE chat_id=? AND tag=?", 
+                            (chat_id, tag), "fetch")
     if rows:
-        del bot.temp_data[chat_id]
+        content, expire = rows[0]
+        if expire != '0':
+            expire_time = datetime.strptime(expire, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() > expire_time:
+                safe_db_operation("DELETE FROM notes WHERE chat_id=? AND tag=?", (chat_id, tag))
+                delete_previous_reply(chat_id)
+                sent_message = bot.reply_to(message, "❌ Note expired!")
+                bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+                return
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('note_shared', chat_id) + f"\n\n{rows[0][0]}")
+        sent_message = bot.reply_to(message, translate('note_shared', chat_id) + f"\n{content}")
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     else:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('note_saved', chat_id).replace("saved", "not found"))
+        sent_message = bot.reply_to(message, translate('note_shared', chat_id).replace("shared", "not found"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_rss_add(message):
@@ -1393,9 +1419,9 @@ def handle_rss_add(message):
         return
     try:
         url, keywords, interval, fmt = message.text.split('|')
-        url = sanitize_input(url.strip())
+        url = url.strip()
         keywords = sanitize_input(keywords.strip())
-        interval = sanitize_input(interval.strip())
+        interval = interval.strip()
         fmt = sanitize_input(fmt.strip())
         if not validate_url(url):
             delete_previous_reply(chat_id)
@@ -1407,7 +1433,8 @@ def handle_rss_add(message):
             sent_message = bot.reply_to(message, translate('rss_invalid_interval', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if safe_db_operation("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", (chat_id, url, keywords, interval, fmt)):
+        if safe_db_operation("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, url, keywords, interval, fmt)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('rss_added', chat_id))
@@ -1418,7 +1445,7 @@ def handle_rss_add(message):
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     except ValueError:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('rss_invalid_url', chat_id))
+        sent_message = bot.reply_to(message, translate('rss_added', chat_id).replace("added", "error adding"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_rss_edit(message):
@@ -1432,9 +1459,9 @@ def handle_rss_edit(message):
         return
     try:
         url, keywords, interval, fmt = message.text.split('|')
-        url = sanitize_input(url.strip())
+        url = url.strip()
         keywords = sanitize_input(keywords.strip())
-        interval = sanitize_input(interval.strip())
+        interval = interval.strip()
         fmt = sanitize_input(fmt.strip())
         if not validate_url(url):
             delete_previous_reply(chat_id)
@@ -1458,7 +1485,7 @@ def handle_rss_edit(message):
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     except ValueError:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('rss_invalid_url', chat_id))
+        sent_message = bot.reply_to(message, translate('rss_updated', chat_id).replace("updated", "error updating"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_sub_grant(message):
@@ -1472,9 +1499,9 @@ def handle_sub_grant(message):
         return
     try:
         user_id, plan, duration = message.text.split()
-        user_id = sanitize_input(user_id.strip('@'))
+        user_id = user_id.strip('@')
         plan = sanitize_input(plan.strip())
-        duration = sanitize_input(duration.strip())
+        duration = duration.strip()
         if not validate_time_format(duration):
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('sub_invalid_duration', chat_id))
@@ -1492,7 +1519,7 @@ def handle_sub_grant(message):
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     except ValueError:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('sub_invalid_duration', chat_id))
+        sent_message = bot.reply_to(message, translate('sub_granted', chat_id).replace("granted", "error granting"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_sub_edit(message):
@@ -1506,16 +1533,16 @@ def handle_sub_edit(message):
         return
     try:
         user_id, plan, duration = message.text.split()
-        user_id = sanitize_input(user_id.strip('@'))
+        user_id = user_id.strip('@')
         plan = sanitize_input(plan.strip())
-        duration = sanitize_input(duration.strip())
+        duration = duration.strip()
         if not validate_time_format(duration):
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('sub_invalid_duration', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if safe_db_operation("UPDATE subscriptions SET plan=?, duration=?, active=1 WHERE chat_id=? AND user_id=?", 
-                           (plan, duration, chat_id, user_id)):
+        if safe_db_operation("UPDATE subscriptions SET plan=?, duration=?, active=? WHERE chat_id=? AND user_id=?", 
+                           (plan, duration, 1, chat_id, user_id)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('sub_updated', chat_id))
@@ -1526,7 +1553,7 @@ def handle_sub_edit(message):
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
     except ValueError:
         delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('sub_invalid_duration', chat_id))
+        sent_message = bot.reply_to(message, translate('sub_updated', chat_id).replace("updated", "error updating"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_fed_link(message):
@@ -1538,10 +1565,10 @@ def handle_fed_link(message):
         return
     if chat_id not in bot.temp_data:
         return
-    linked_group = sanitize_input(message.text)
+    linked_group = message.text.strip()
     try:
         bot.get_chat(linked_group)
-        if safe_db_operation("INSERT INTO federations VALUES (?, ?, ?, ?)", 
+        if safe_db_operation("INSERT OR REPLACE INTO federations VALUES (?, ?, ?, ?)", 
                            (chat_id, linked_group, json.dumps([]), 0)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
@@ -1565,15 +1592,9 @@ def handle_fed_sync(message):
         return
     if chat_id not in bot.temp_data:
         return
-    actions = [a.strip() for a in message.text.split(',')]
-    valid_actions = [a for a in actions if a in ['ban', 'mute', 'warn']]
-    if not valid_actions:
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('fed_sync_set', chat_id).replace("updated", "invalid actions"))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        return
+    actions = [act.strip() for act in message.text.split(',')]
     if safe_db_operation("UPDATE federations SET sync_actions=? WHERE chat_id=?", 
-                       (json.dumps(valid_actions), chat_id)):
+                       (json.dumps(actions), chat_id)):
         del bot.temp_data[chat_id]
         delete_previous_reply(chat_id)
         sent_message = bot.reply_to(message, translate('fed_sync_set', chat_id))
@@ -1593,12 +1614,12 @@ def handle_captcha_set(message):
     if chat_id not in bot.temp_data:
         return
     try:
-        ctype, difficulty, time_limit, action = message.text.split()
-        ctype = sanitize_input(ctype.strip())
-        difficulty = sanitize_input(difficulty.strip())
-        time_limit = sanitize_input(time_limit.strip())
-        action = sanitize_input(action.strip())
-        if ctype not in ['math', 'text', 'image']:
+        captcha_type, difficulty, time_limit, fail_action = message.text.split()
+        captcha_type = sanitize_input(captcha_type.strip())
+        difficulty = difficulty.strip().lower()
+        time_limit = parse_time(time_limit.strip())
+        fail_action = fail_action.strip().lower()
+        if captcha_type not in ['math', 'text', 'image']:
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('captcha_error', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
@@ -1613,13 +1634,13 @@ def handle_captcha_set(message):
             sent_message = bot.reply_to(message, translate('captcha_invalid_time', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if action not in ['kick', 'mute']:
+        if fail_action not in ['kick', 'mute']:
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('captcha_invalid_action', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
         if safe_db_operation("INSERT OR REPLACE INTO captchas VALUES (?, ?, ?, ?, ?)", 
-                           (chat_id, ctype, difficulty, parse_time(time_limit), action)):
+                           (chat_id, captcha_type, difficulty, time_limit, fail_action)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('captcha_saved', chat_id))
@@ -1642,36 +1663,23 @@ def handle_dump_set(message):
         return
     if chat_id not in bot.temp_data:
         return
-    if bot.temp_data[chat_id].get('sub_action') == 'set_channel':
-        channel_id = sanitize_input(message.text)
-        try:
-            bot.get_chat(channel_id)
-            if safe_db_operation("INSERT OR REPLACE INTO message_dump VALUES (?, ?, ?, ?, ?)", 
-                               (chat_id, '', '', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), channel_id)):
-                del bot.temp_data[chat_id]
-                delete_previous_reply(chat_id)
-                sent_message = bot.reply_to(message, translate('dump_channel_set', chat_id))
-                bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-            else:
-                delete_previous_reply(chat_id)
-                sent_message = bot.reply_to(message, translate('dump_error', chat_id))
-                bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        except:
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('dump_invalid_channel', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    else:
-        status = 'on' if message.text.lower() == 'on' else 'off'
-        if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'message_dump', 'status', ?)", 
-                           (chat_id, json.dumps({'status': status}))):
+    channel_id = message.text.strip()
+    try:
+        bot.get_chat(channel_id)
+        if safe_db_operation("INSERT OR REPLACE INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, "", "", "", channel_id)):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('dump_enabled', chat_id, status=status))
+            sent_message = bot.reply_to(message, translate('dump_channel_set', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
         else:
             delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('dump_error', chat_id))
+            sent_message = bot.reply_to(message, translate('dump_invalid_channel', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    except:
+        delete_previous_reply(chat_id)
+        sent_message = bot.reply_to(message, translate('dump_invalid_channel', chat_id))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_plugin_install(message):
     chat_id = str(message.chat.id)
@@ -1683,7 +1691,7 @@ def handle_plugin_install(message):
     if chat_id not in bot.temp_data:
         return
     plugin_name = sanitize_input(message.text)
-    if safe_db_operation("INSERT INTO plugins VALUES (?, ?, ?, ?)", 
+    if safe_db_operation("INSERT OR REPLACE INTO plugins VALUES (?, ?, ?, ?)", 
                        (chat_id, plugin_name, json.dumps({}), 1)):
         del bot.temp_data[chat_id]
         delete_previous_reply(chat_id)
@@ -1706,7 +1714,7 @@ def handle_plugin_config(message):
     try:
         plugin_name, config = message.text.split('|', 1)
         plugin_name = sanitize_input(plugin_name.strip())
-        config = sanitize_input(config.strip())
+        config = json.dumps(json.loads(config.strip()))
         if safe_db_operation("UPDATE plugins SET config=? WHERE chat_id=? AND plugin_name=?", 
                            (config, chat_id, plugin_name)):
             del bot.temp_data[chat_id]
@@ -1722,624 +1730,660 @@ def handle_plugin_config(message):
         sent_message = bot.reply_to(message, translate('plugin_error', chat_id))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
-def handle_permissions_commands(message):
-    chat_id = str(message.chat.id)
-    if not is_creator_or_admin(bot, chat_id, message.from_user.id):
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('admin_only', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        return
-    if chat_id not in bot.temp_data:
-        return
-    try:
-        user_id, commands = message.text.split('|')
-        user_id = sanitize_input(user_id.strip('@'))
-        commands = [c.strip() for c in commands.split(',')]
-        if safe_db_operation("UPDATE permissions SET commands=? WHERE chat_id=? AND user_id=?", 
-                           (json.dumps(commands), chat_id, user_id)):
-            del bot.temp_data[chat_id]
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('permissions_updated', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        else:
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('permissions_invalid', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    except ValueError:
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('permissions_invalid', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-
-def handle_permissions_duration(message):
-    chat_id = str(message.chat.id)
-    if not is_creator_or_admin(bot, chat_id, message.from_user.id):
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('admin_only', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        return
-    if chat_id not in bot.temp_data:
-        return
-    try:
-        user_id, duration = message.text.split()
-        user_id = sanitize_input(user_id.strip('@'))
-        duration = sanitize_input(duration.strip())
-        if not validate_time_format(duration):
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('sub_invalid_duration', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-            return
-        if safe_db_operation("UPDATE permissions SET duration=? WHERE chat_id=? AND user_id=?", 
-                           (duration, chat_id, user_id)):
-            del bot.temp_data[chat_id]
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('permissions_updated', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        else:
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('permissions_invalid', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    except ValueError:
-        delete_previous_reply(chat_id)
-        sent_message = bot.reply_to(message, translate('permissions_invalid', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-
 # CALLBACK QUERY HANDLER
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     chat_id = str(call.message.chat.id)
+    data = call.data
     user_id = str(call.from_user.id)
-    log_activity(chat_id, user_id, f"callback_{call.data}")
     
-    if not is_creator_or_admin(bot, chat_id, user_id) and call.data not in ['show_commands', 'help']:
-        delete_previous_reply(chat_id)
-        sent_message = bot.send_message(chat_id, translate('admin_only', chat_id))
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    if not is_creator_or_admin(bot, chat_id, user_id) and data not in ['main', 'show_commands', 'help']:
+        bot.answer_callback_query(call.id, translate('admin_only', chat_id))
         return
     
     delete_previous_reply(chat_id)
+    
+    handlers = {
+        'main': lambda: show_main_menu(chat_id, call.message),
+        'group_menu': lambda: show_group_menu(chat_id, call.message),
+        'show_commands': lambda: show_commands(chat_id, call.message),
+        'help': lambda: show_help(chat_id, call.message),
+        'analytics_menu': lambda: show_analytics_menu(chat_id, call.message),
+        'triggers_menu': lambda: show_triggers_menu(chat_id, call.message),
+        'welcome_menu': lambda: show_welcome_menu(chat_id, call.message),
+        'flood_menu': lambda: show_flood_menu(chat_id, call.message),
+        'broadcast_menu': lambda: show_broadcast_menu(chat_id, call.message),
+        'blacklist_menu': lambda: show_blacklist_menu(chat_id, call.message),
+        'advanced_menu': lambda: show_advanced_menu(chat_id, call.message),
+        'permissions_menu': lambda: show_permissions_menu(chat_id, call.message),
+        'customcmd_menu': lambda: show_customcmd_menu(chat_id, call.message),
+        'polls_menu': lambda: show_polls_menu(chat_id, call.message),
+        'notes_menu': lambda: show_notes_menu(chat_id, call.message),
+        'rss_menu': lambda: show_rss_menu(chat_id, call.message),
+        'subs_menu': lambda: show_subs_menu(chat_id, call.message),
+        'fed_menu': lambda: show_fed_menu(chat_id, call.message),
+        'captcha_menu': lambda: show_captcha_menu(chat_id, call.message),
+        'dump_menu': lambda: show_dump_menu(chat_id, call.message),
+        'plugins_menu': lambda: show_plugins_menu(chat_id, call.message),
+        'moderation_lock_menu': lambda: show_moderation_lock_menu(chat_id, call.message),
+        'lang_menu': lambda: show_lang_menu(chat_id, call.message),
+        'triggers_add': lambda: triggers_add(chat_id, call.message, False),
+        'triggers_add_regex': lambda: triggers_add(chat_id, call.message, True),
+        'triggers_list': lambda: triggers_list(chat_id, call.message),
+        'triggers_edit': lambda: triggers_edit(chat_id, call.message),
+        'triggers_delete': lambda: triggers_delete(chat_id, call.message),
+        'welcome_set': lambda: welcome_set(chat_id, call.message, True),
+        'welcome_set_leave': lambda: welcome_set(chat_id, call.message, False),
+        'welcome_preview': lambda: welcome_preview(chat_id, call.message),
+        'flood_enable': lambda: flood_enable(chat_id, call.message),
+        'flood_set_limit': lambda: flood_set_limit(chat_id, call.message),
+        'flood_stats': lambda: flood_stats(chat_id, call.message),
+        'broadcast_send': lambda: broadcast_send(chat_id, call.message),
+        'broadcast_groups': lambda: broadcast_groups(chat_id, call.message),
+        'broadcast_preview': lambda: broadcast_preview(chat_id, call.message),
+        'blacklist_add': lambda: blacklist_add(chat_id, call.message, False),
+        'blacklist_add_regex': lambda: blacklist_add(chat_id, call.message, True),
+        'blacklist_list': lambda: blacklist_list(chat_id, call.message),
+        'blacklist_remove': lambda: blacklist_remove(chat_id, call.message),
+        'grant_role': lambda: grant_role(chat_id, call.message),
+        'list_roles': lambda: list_roles(chat_id, call.message),
+        'set_commands': lambda: set_commands(chat_id, call.message),
+        'set_duration': lambda: set_duration(chat_id, call.message),
+        'customcmd_create': lambda: customcmd_create(chat_id, call.message),
+        'customcmd_list': lambda: customcmd_list(chat_id, call.message),
+        'customcmd_edit': lambda: customcmd_edit(chat_id, call.message),
+        'poll_new': lambda: poll_new(chat_id, call.message),
+        'poll_settings': lambda: poll_settings(chat_id, call.message),
+        'poll_active': lambda: poll_active(chat_id, call.message),
+        'note_save': lambda: note_save(chat_id, call.message),
+        'note_search': lambda: note_search(chat_id, call.message),
+        'note_share': lambda: note_share(chat_id, call.message),
+        'rss_add': lambda: rss_add(chat_id, call.message),
+        'rss_list': lambda: rss_list(chat_id, call.message),
+        'rss_edit': lambda: rss_edit(chat_id, call.message),
+        'sub_grant': lambda: sub_grant(chat_id, call.message),
+        'sub_list': lambda: sub_list(chat_id, call.message),
+        'sub_edit': lambda: sub_edit(chat_id, call.message),
+        'fed_link': lambda: fed_link(chat_id, call.message),
+        'fed_list': lambda: fed_list(chat_id, call.message),
+        'fed_sync': lambda: fed_sync(chat_id, call.message),
+        'captcha_set_type': lambda: captcha_set_type(chat_id, call.message),
+        'captcha_difficulty': lambda: captcha_difficulty(chat_id, call.message),
+        'captcha_time_limit': lambda: captcha_time_limit(chat_id, call.message),
+        'captcha_fail_action': lambda: captcha_fail_action(chat_id, call.message),
+        'dump_enable': lambda: dump_enable(chat_id, call.message),
+        'dump_channel': lambda: dump_channel(chat_id, call.message),
+        'dump_view': lambda: dump_view(chat_id, call.message),
+        'plugin_install': lambda: plugin_install(chat_id, call.message),
+        'plugin_list': lambda: plugin_list(chat_id, call.message),
+        'plugin_config': lambda: plugin_config(chat_id, call.message),
+        'lock_links': lambda: toggle_lock(chat_id, call.message, 'links'),
+        'lock_media': lambda: toggle_lock(chat_id, call.message, 'media'),
+        'lock_stickers': lambda: toggle_lock(chat_id, call.message, 'stickers'),
+        'lock_forwards': lambda: toggle_lock(chat_id, call.message, 'forwards'),
+        'lang_english': lambda: set_language(chat_id, call.message, 'english'),
+        'lang_hindi': lambda: set_language(chat_id, call.message, 'hindi')
+    }
+    
+    handler = handlers.get(data)
+    if handler:
+        handler()
+    else:
+        bot.answer_callback_query(call.id, "Invalid action!")
+
+def show_main_menu(chat_id, message):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    
-    # MAIN MENU
-    if call.data == 'main':
-        markup.add(
-            types.InlineKeyboardButton("🛡️ Verify", callback_data='captcha_menu'),
-            types.InlineKeyboardButton("👋 Welcome", callback_data='welcome_menu'),
-            types.InlineKeyboardButton("📬 Triggers", callback_data='triggers_menu'),
-            types.InlineKeyboardButton("⏰ Schedule", callback_data='schedule_menu'),
-            types.InlineKeyboardButton("🔒 Moderation", callback_data='moderation_menu'),
-            types.InlineKeyboardButton("🧹 Clean", callback_data='clean_menu'),
-            types.InlineKeyboardButton("🚫 Block", callback_data='blacklist_menu'),
-            types.InlineKeyboardButton("🌐 Lang", callback_data='lang_menu'),
-            types.InlineKeyboardButton("⚙️ Advanced", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('main_menu', chat_id), reply_markup=markup)
-    
-    # GROUP MENU
-    elif call.data == 'group_menu':
-        markup.add(
-            types.InlineKeyboardButton("🔒 Locks", callback_data='moderation_menu'),
-            types.InlineKeyboardButton("🛡️ CAPTCHA", callback_data='captcha_menu'),
-            types.InlineKeyboardButton("📊 Analytics", callback_data='analytics_menu'),
-            types.InlineKeyboardButton("🎯 Triggers", callback_data='triggers_menu'),
-            types.InlineKeyboardButton("👋 Welcome", callback_data='welcome_menu'),
-            types.InlineKeyboardButton("🛡️ Flood", callback_data='flood_menu'),
-            types.InlineKeyboardButton("📢 Broadcast", callback_data='broadcast_menu'),
-            types.InlineKeyboardButton("🚫 Blacklists", callback_data='blacklist_menu'),
-            types.InlineKeyboardButton("👑 Permissions", callback_data='permissions_menu'),
-            types.InlineKeyboardButton("⚙️ Commands", callback_data='customcmd_menu'),
-            types.InlineKeyboardButton("📊 Polls", callback_data='polls_menu'),
-            types.InlineKeyboardButton("📝 Notes", callback_data='notes_menu'),
-            types.InlineKeyboardButton("📰 RSS", callback_data='rss_menu'),
-            types.InlineKeyboardButton("💰 Subs", callback_data='subs_menu'),
-            types.InlineKeyboardButton("🔗 Federation", callback_data='fed_menu'),
-            types.InlineKeyboardButton("🎲 Captcha", callback_data='captcha_menu'),
-            types.InlineKeyboardButton("💾 Dump", callback_data='dump_menu'),
-            types.InlineKeyboardButton("🔌 Plugins", callback_data='plugins_menu'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='main')
-        )
-        sent_message = bot.send_message(chat_id, translate('group_menu', chat_id), reply_markup=markup)
-    
-    # ANALYTICS MENU
-    elif call.data == 'analytics_menu':
-        markup.add(
-            types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
-            types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
-            types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, get_analytics(chat_id), reply_markup=markup)
-    
-    # TRIGGERS MENU
-    elif call.data == 'triggers_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Add", callback_data='triggers_add'),
-            types.InlineKeyboardButton("📝 List", callback_data='triggers_list'),
-            types.InlineKeyboardButton("✏️ Edit", callback_data='triggers_edit'),
-            types.InlineKeyboardButton("🗑️ Delete", callback_data='triggers_delete'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('triggers_menu', chat_id), reply_markup=markup)
-    
-    # WELCOME MENU
-    elif call.data == 'welcome_menu':
-        markup.add(
-            types.InlineKeyboardButton("👋 Set Welcome", callback_data='welcome_set'),
-            types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview'),
-            types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('welcome_menu', chat_id), reply_markup=markup)
-    
-    # FLOOD MENU
-    elif call.data == 'flood_menu':
-        markup.add(
-            types.InlineKeyboardButton("🛡️ Enable", callback_data='flood_enable'),
-            types.InlineKeyboardButton("⚙️ Set Limit", callback_data='flood_set_limit'),
-            types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('flood_menu', chat_id), reply_markup=markup)
-    
-    # BROADCAST MENU
-    elif call.data == 'broadcast_menu':
-        markup.add(
-            types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send'),
-            types.InlineKeyboardButton("👥 Select Groups", callback_data='broadcast_groups'),
-            types.InlineKeyboardButton("📋 Preview", callback_data='broadcast_preview'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('broadcast_menu', chat_id), reply_markup=markup)
-    
-    # BLACKLIST MENU
-    elif call.data == 'blacklist_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Add Word", callback_data='blacklist_add_word'),
-            types.InlineKeyboardButton("⚡ Add Regex", callback_data='blacklist_add_regex'),
-            types.InlineKeyboardButton("📝 List", callback_data='blacklist_list'),
-            types.InlineKeyboardButton("🗑️ Remove", callback_data='blacklist_remove'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('blacklist_menu', chat_id), reply_markup=markup)
-    
-    # ADVANCED MENU
-    elif call.data == 'advanced_menu':
-        markup.add(
-            types.InlineKeyboardButton("👑 Permissions", callback_data='permissions_menu'),
-            types.InlineKeyboardButton("⚙️ Custom Cmds", callback_data='customcmd_menu'),
-            types.InlineKeyboardButton("📊 Polls", callback_data='polls_menu'),
-            types.InlineKeyboardButton("📝 Notes", callback_data='notes_menu'),
-            types.InlineKeyboardButton("📰 RSS", callback_data='rss_menu'),
-            types.InlineKeyboardButton("💰 Subscriptions", callback_data='subs_menu'),
-            types.InlineKeyboardButton("🔗 Federation", callback_data='fed_menu'),
-            types.InlineKeyboardButton("🎲 Captcha Types", callback_data='captcha_menu'),
-            types.InlineKeyboardButton("💾 Message Dump", callback_data='dump_menu'),
-            types.InlineKeyboardButton("🔌 Plugins", callback_data='plugins_menu'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='main')
-        )
-        sent_message = bot.send_message(chat_id, translate('advanced_menu', chat_id), reply_markup=markup)
-    
-    # PERMISSIONS MENU
-    elif call.data == 'permissions_menu':
-        markup.add(
-            types.InlineKeyboardButton("👑 Grant Role", callback_data='permissions_grant'),
-            types.InlineKeyboardButton("📋 List Roles", callback_data='permissions_list'),
-            types.InlineKeyboardButton("⚙️ Set Commands", callback_data='permissions_commands'),
-            types.InlineKeyboardButton("⏰ Set Duration", callback_data='permissions_duration'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('permissions_menu', chat_id), reply_markup=markup)
-    
-    # CUSTOM COMMANDS MENU
-    elif call.data == 'customcmd_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Create", callback_data='customcmd_create'),
-            types.InlineKeyboardButton("📝 List", callback_data='customcmd_list'),
-            types.InlineKeyboardButton("✏️ Edit", callback_data='customcmd_edit'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('customcmd_menu', chat_id), reply_markup=markup)
-    
-    # POLLS MENU
-    elif call.data == 'polls_menu':
-        markup.add(
-            types.InlineKeyboardButton("📊 New Poll", callback_data='poll_new'),
-            types.InlineKeyboardButton("⚙️ Settings", callback_data='poll_settings'),
-            types.InlineKeyboardButton("📋 Active", callback_data='poll_active'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('polls_menu', chat_id), reply_markup=markup)
-    
-    # NOTES MENU
-    elif call.data == 'notes_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Save Note", callback_data='note_save'),
-            types.InlineKeyboardButton("🔍 Search", callback_data='note_search'),
-            types.InlineKeyboardButton("📤 Share", callback_data='note_share'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('notes_menu', chat_id), reply_markup=markup)
-    
-    # RSS MENU
-    elif call.data == 'rss_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Add Feed", callback_data='rss_add'),
-            types.InlineKeyboardButton("📝 List", callback_data='rss_list'),
-            types.InlineKeyboardButton("✏️ Edit", callback_data='rss_edit'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('rss_menu', chat_id), reply_markup=markup)
-    
-    # SUBSCRIPTIONS MENU
-    elif call.data == 'subs_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Grant Plan", callback_data='sub_grant'),
-            types.InlineKeyboardButton("📝 List", callback_data='sub_list'),
-            types.InlineKeyboardButton("✏️ Edit", callback_data='sub_edit'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('subs_menu', chat_id), reply_markup=markup)
-    
-    # FEDERATION MENU
-    elif call.data == 'fed_menu':
-        markup.add(
-            types.InlineKeyboardButton("🔗 Link Group", callback_data='fed_link'),
-            types.InlineKeyboardButton("📝 List", callback_data='fed_list'),
-            types.InlineKeyboardButton("⚙️ Sync", callback_data='fed_sync'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('fed_menu', chat_id), reply_markup=markup)
-    
-    # CAPTCHA MENU
-    elif call.data == 'captcha_menu':
-        markup.add(
-            types.InlineKeyboardButton("⚙️ Set Type", callback_data='captcha_type'),
-            types.InlineKeyboardButton("📊 Difficulty", callback_data='captcha_difficulty'),
-            types.InlineKeyboardButton("⏰ Time Limit", callback_data='captcha_time'),
-            types.InlineKeyboardButton("🛑 Fail Action", callback_data='captcha_action'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('captcha_menu', chat_id), reply_markup=markup)
-    
-    # MESSAGE DUMP MENU
-    elif call.data == 'dump_menu':
-        markup.add(
-            types.InlineKeyboardButton("🛑 Enable", callback_data='dump_enable'),
-            types.InlineKeyboardButton("📤 Channel", callback_data='dump_channel'),
-            types.InlineKeyboardButton("📝 View", callback_data='dump_view'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('dump_menu', chat_id), reply_markup=markup)
-    
-    # PLUGINS MENU
-    elif call.data == 'plugins_menu':
-        markup.add(
-            types.InlineKeyboardButton("➕ Install", callback_data='plugin_install'),
-            types.InlineKeyboardButton("📝 List", callback_data='plugin_list'),
-            types.InlineKeyboardButton("⚙️ Config", callback_data='plugin_config'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('plugins_menu', chat_id), reply_markup=markup)
-    
-    # MODERATION LOCK MENU
-    elif call.data == 'moderation_menu':
-        settings = get_all_settings(chat_id)
-        links_status = safe_json(settings.get('moderation_lock_links', '{}'))['status']
-        media_status = safe_json(settings.get('moderation_lock_media', '{}'))['status']
-        stickers_status = safe_json(settings.get('moderation_lock_stickers', '{}'))['status']
-        forwards_status = safe_json(settings.get('moderation_lock_forwards', '{}'))['status']
-        markup.add(
-            types.InlineKeyboardButton(f"🔗 Links: {links_status}", callback_data='lock_links'),
-            types.InlineKeyboardButton(f"📸 Media: {media_status}", callback_data='lock_media'),
-            types.InlineKeyboardButton(f"😀 Stickers: {stickers_status}", callback_data='lock_stickers'),
-            types.InlineKeyboardButton(f"📤 Forwards: {forwards_status}", callback_data='lock_forwards'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-        )
-        sent_message = bot.send_message(chat_id, translate('moderation_lock_menu', chat_id, 
-                                                         links_status=links_status, 
-                                                         media_status=media_status, 
-                                                         stickers_status=stickers_status, 
-                                                         forwards_status=forwards_status), 
-                                       reply_markup=markup)
-    
-    # LANGUAGE MENU
-    elif call.data == 'lang_menu':
-        markup.add(
-            types.InlineKeyboardButton("🇬🇧 English", callback_data='lang_english'),
-            types.InlineKeyboardButton("🇮🇳 Hindi", callback_data='lang_hindi'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='main')
-        )
-        sent_message = bot.send_message(chat_id, translate('lang_menu', chat_id), reply_markup=markup)
-    
-    # COMMANDS LIST
-    elif call.data == 'show_commands':
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Back", callback_data='main')
-        )
-        sent_message = bot.send_message(chat_id, translate('commands_list', chat_id), reply_markup=markup)
-    
-    # TRIGGERS ACTIONS
-    elif call.data == 'triggers_add':
-        bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': 0, 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send keyword|response (e.g., hello|Hi there!)")
-    
-    elif call.data == 'triggers_add_regex':
-        bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': 1, 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send regex|response (e.g., ^hello.*|Hi there!)")
-    
-    elif call.data == 'triggers_list':
-        triggers = safe_db_operation("SELECT keyword, response FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
-        text = "📝 Triggers:\n" + ("\n".join(f"{k}: {r}" for k, r in triggers) or "No triggers found")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'triggers_edit':
-        bot.temp_data[chat_id] = {'action': 'triggers_edit', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the keyword to edit")
-    
-    elif call.data == 'triggers_delete':
-        bot.temp_data[chat_id] = {'action': 'triggers_delete', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the keyword to delete")
-    
-    # WELCOME ACTIONS
-    elif call.data == 'welcome_set':
-        bot.temp_data[chat_id] = {'action': 'welcome_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the welcome message")
-    
-    elif call.data == 'welcome_preview':
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='welcome_menu'))
-        sent_message = bot.send_message(chat_id, get_welcome(chat_id), reply_markup=markup)
-    
-    elif call.data == 'leave_set':
-        bot.temp_data[chat_id] = {'action': 'leave_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the leave message")
-    
-    # FLOOD ACTIONS
-    elif call.data == 'flood_enable':
-        bot.temp_data[chat_id] = {'action': 'flood_enable', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send 'on' or 'off'")
-    
-    elif call.data == 'flood_set_limit':
-        bot.temp_data[chat_id] = {'action': 'flood_set_limit', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send messages per minute (1-50)")
-    
-    elif call.data == 'flood_stats':
-        rows = safe_db_operation("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM analytics WHERE chat_id=? AND action LIKE 'flood_%'", 
-                                (chat_id,), "fetch")
-        total, users = rows[0] if rows else (0, 0)
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='flood_menu'))
-        sent_message = bot.send_message(chat_id, f"📊 Flood Incidents: {total} (Users: {users})", reply_markup=markup)
-    
-    # BROADCAST ACTIONS
-    elif call.data == 'broadcast_send':
-        bot.temp_data[chat_id] = {'action': 'broadcast_send', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the broadcast message")
-    
-    elif call.data == 'broadcast_groups':
-        bot.temp_data[chat_id] = {'action': 'broadcast_groups', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send group IDs (comma-separated)")
-    
-    elif call.data == 'broadcast_preview':
-        rows = safe_db_operation("SELECT message FROM broadcasts WHERE chat_id=? AND sent=0", (chat_id,), "fetch")
-        text = "📋 Broadcast Preview:\n" + (rows[0][0] if rows else "No pending broadcasts")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    # BLACKLIST ACTIONS
-    elif call.data == 'blacklist_add_word':
-        bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 0, 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the word to blacklist")
-    
-    elif call.data == 'blacklist_add_regex':
-        bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 1, 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the regex pattern to blacklist")
-    
-    elif call.data == 'blacklist_list':
-        words = safe_db_operation("SELECT word FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
-        text = "🚫 Blacklist:\n" + ("\n".join(w[0] for w in words) or "No blacklisted words")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'blacklist_remove':
-        bot.temp_data[chat_id] = {'action': 'blacklist_remove', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the word to remove from blacklist")
-    
-    # PERMISSION ACTIONS
-    elif call.data == 'permissions_grant':
-        bot.temp_data[chat_id] = {'action': 'grant_role', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send user ID and role (e.g., @user ADMIN)")
-    
-    elif call.data == 'permissions_list':
-        roles = safe_db_operation("SELECT user_id, role FROM permissions WHERE chat_id=?", (chat_id,), "fetch")
-        text = "👑 Roles:\n" + ("\n".join(f"{u}: {r}" for u, r in roles) or "No roles assigned")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'permissions_commands':
-        bot.temp_data[chat_id] = {'action': 'permissions_commands', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send user ID and commands (e.g., @user cmd1,cmd2)")
-    
-    elif call.data == 'permissions_duration':
-        bot.temp_data[chat_id] = {'action': 'permissions_duration', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send user ID and duration (e.g., @user 1d)")
-    
-    # CUSTOM COMMANDS ACTIONS
-    elif call.data == 'customcmd_create':
-        bot.temp_data[chat_id] = {'action': 'customcmd_create', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send trigger|response (e.g., /hello|Hi there!)")
-    
-    elif call.data == 'customcmd_list':
-        cmds = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
-        text = "⚙️ Custom Commands:\n" + ("\n".join(f"/{t}: {r}" for t, r in cmds) or "No custom commands")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'customcmd_edit':
-        bot.temp_data[chat_id] = {'action': 'customcmd_edit', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the command to edit (e.g., /hello)")
-    
-    # POLL ACTIONS
-    elif call.data == 'poll_new':
-        bot.temp_data[chat_id] = {'action': 'poll_new', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send question|options|anonymous|timer (e.g., Vote?|A,B,C|true|1d)")
-    
-    elif call.data == 'poll_settings':
-        polls = safe_db_operation("SELECT poll_id, question FROM polls WHERE chat_id=?", (chat_id,), "fetch")
-        text = "📊 Polls:\n" + ("\n".join(f"{p}: {q}" for p, q in polls) or "No polls found")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'poll_active':
-        polls = safe_db_operation("SELECT poll_id, question, results FROM polls WHERE chat_id=?", (chat_id,), "fetch")
-        text = "📊 Active Polls:\n" + ("\n".join(f"{p}: {q}\nResults: {r}" for p, q, r in polls) or "No active polls")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    # NOTE ACTIONS
-    elif call.data == 'note_save':
-        bot.temp_data[chat_id] = {'action': 'note_save', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send tag|content|expire (e.g., info|Details here|1d)")
-    
-    elif call.data == 'note_search':
-        notes = safe_db_operation("SELECT tag, content FROM notes WHERE chat_id=?", (chat_id,), "fetch")
-        text = "📝 Notes:\n" + ("\n".join(f"{t}: {c}" for t, c in notes) or "No notes found")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'note_share':
-        bot.temp_data[chat_id] = {'action': 'note_share', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the note tag to share")
-    
-    # RSS ACTIONS
-    elif call.data == 'rss_add':
-        bot.temp_data[chat_id] = {'action': 'rss_add', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send url|keywords|interval|format (e.g., example.com|news|1h|text)")
-    
-    elif call.data == 'rss_list':
-        feeds = safe_db_operation("SELECT url, keywords FROM rss_feeds WHERE chat_id=?", (chat_id,), "fetch")
-        text = "📰 RSS Feeds:\n" + ("\n".join(f"{u}: {k}" for u, k in feeds) or "No RSS feeds")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'rss_edit':
-        bot.temp_data[chat_id] = {'action': 'rss_edit', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send url|keywords|interval|format to edit")
-    
-    # SUBSCRIPTION ACTIONS
-    elif call.data == 'sub_grant':
-        bot.temp_data[chat_id] = {'action': 'sub_grant', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send user_id|plan|duration (e.g., @user|premium|1m)")
-    
-    elif call.data == 'sub_list':
-        subs = safe_db_operation("SELECT user_id, plan, duration FROM subscriptions WHERE chat_id=?", (chat_id,), "fetch")
-        text = "💰 Subscriptions:\n" + ("\n".join(f"{u}: {p} ({d})" for u, p, d in subs) or "No subscriptions")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'sub_edit':
-        bot.temp_data[chat_id] = {'action': 'sub_edit', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send user_id|plan|duration to edit")
-    
-    # FEDERATION ACTIONS
-    elif call.data == 'fed_link':
-        bot.temp_data[chat_id] = {'action': 'fed_link', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the group ID to link")
-    
-    elif call.data == 'fed_list':
-        groups = safe_db_operation("SELECT linked_group FROM federations WHERE chat_id=?", (chat_id,), "fetch")
-        text = "🔗 Linked Groups:\n" + ("\n".join(g[0] for g in groups) or "No linked groups")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'fed_sync':
-        bot.temp_data[chat_id] = {'action': 'fed_sync', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send actions to sync (e.g., ban,mute,warn)")
-    
-    # CAPTCHA ACTIONS
-    elif call.data == 'captcha_type':
-        bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send type|difficulty|time_limit|action (e.g., math|easy|5m|kick)")
-    
-    elif call.data == 'captcha_difficulty':
-        bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send type|difficulty|time_limit|action (e.g., math|easy|5m|kick)")
-    
-    elif call.data == 'captcha_time':
-        bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send type|difficulty|time_limit|action (e.g., math|easy|5m|kick)")
-    
-    elif call.data == 'captcha_action':
-        bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send type|difficulty|time_limit|action (e.g., math|easy|5m|kick)")
-    
-    # MESSAGE DUMP ACTIONS
-    elif call.data == 'dump_enable':
-        bot.temp_data[chat_id] = {'action': 'dump_set', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send 'on' or 'off'")
-    
-    elif call.data == 'dump_channel':
-        bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'set_channel', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the channel ID")
-    
-    elif call.data == 'dump_view':
-        messages = safe_db_operation("SELECT deleted_msg, user_id, timestamp FROM message_dump WHERE chat_id=?", 
-                                   (chat_id,), "fetch")
-        text = "💾 Deleted Messages:\n" + ("\n".join(f"{t}: {u} - {m}" for m, u, t in messages) or "No deleted messages")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    # PLUGINS ACTIONS
-    elif call.data == 'plugin_install':
-        bot.temp_data[chat_id] = {'action': 'plugin_install', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send the plugin name")
-    
-    elif call.data == 'plugin_list':
-        plugins = safe_db_operation("SELECT plugin_name, config FROM plugins WHERE chat_id=?", (chat_id,), "fetch")
-        text = "🔌 Plugins:\n" + ("\n".join(f"{p}: {c}" for p, c in plugins) or "No plugins installed")
-        markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu'))
-        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
-    
-    elif call.data == 'plugin_config':
-        bot.temp_data[chat_id] = {'action': 'plugin_config', 'timeout': time.time() + 300}
-        sent_message = bot.send_message(chat_id, "Send plugin_name|config")
-    
-    # MODERATION LOCKS
-    elif call.data.startswith('lock_'):
-        lock_type = call.data.split('_')[1]
-        settings = get_all_settings(chat_id)
-        current = safe_json(settings.get(f'moderation_lock_{lock_type}', '{}'))
-        status = 'off' if current.get('status') == 'on' else 'on'
-        if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
-                           (chat_id, 'moderation', f'lock_{lock_type}', json.dumps({'status': status}))):
-            sent_message = bot.send_message(chat_id, translate('lock_set', chat_id, action=lock_type.title(), status=status))
-        else:
-            sent_message = bot.send_message(chat_id, translate('lock_error', chat_id, action=lock_type.title()))
-    
-    # LANGUAGE SET
-    elif call.data.startswith('lang_'):
-        lang = call.data.split('_')[1]
-        lang_code = 'en' if lang == 'english' else 'hi'
-        if safe_db_operation("INSERT OR REPLACE INTO language_settings VALUES (?, ?)", (chat_id, lang_code)):
-            sent_message = bot.send_message(chat_id, translate('lang_set', chat_id, lang=lang))
-        else:
-            sent_message = bot.send_message(chat_id, translate('lang_error', chat_id))
-    
-    # ANALYTICS ACTIONS
-    elif call.data.startswith('analytics_'):
-        period = call.data.split('_')[1]
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Back", callback_data='analytics_menu')
-        )
-        sent_message = bot.send_message(chat_id, get_analytics(chat_id, period), reply_markup=markup)
-    
+    markup.add(
+        types.InlineKeyboardButton(translate('group_menu', chat_id).split('\n')[0], callback_data='group_menu'),
+        types.InlineKeyboardButton(translate('lang_menu', chat_id).split('\n')[0], callback_data='lang_menu'),
+        types.InlineKeyboardButton(translate('commands_list', chat_id).split('\n')[0], callback_data='show_commands')
+    )
+    sent_message = bot.send_message(chat_id, translate('main_menu', chat_id), reply_markup=markup)
     bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    bot.answer_callback_query(call.id)
+
+def show_group_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('moderation_lock_menu', chat_id).split('\n')[0], callback_data='moderation_lock_menu'),
+        types.InlineKeyboardButton(translate('analytics_menu', chat_id).split('\n')[0], callback_data='analytics_menu'),
+        types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[0], callback_data='triggers_menu'),
+        types.InlineKeyboardButton(translate('welcome_menu', chat_id).split('\n')[0], callback_data='welcome_menu'),
+        types.InlineKeyboardButton(translate('flood_menu', chat_id).split('\n')[0], callback_data='flood_menu'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[0], callback_data='broadcast_menu'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[0], callback_data='blacklist_menu'),
+        types.InlineKeyboardButton(translate('advanced_menu', chat_id).split('\n')[0], callback_data='advanced_menu'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main')
+    )
+    sent_message = bot.send_message(chat_id, translate('group_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_commands(chat_id, message):
+    sent_message = bot.send_message(chat_id, translate('commands_list', chat_id))
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_help(chat_id, message):
+    sent_message = bot.send_message(chat_id, "ℹ️ Help: Contact support or check documentation!")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_analytics_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
+        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
+        types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, get_analytics(chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_triggers_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[2], callback_data='triggers_add'),
+        types.InlineKeyboardButton("➕ Regex", callback_data='triggers_add_regex'),
+        types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[3], callback_data='triggers_list'),
+        types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[4], callback_data='triggers_edit'),
+        types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[5], callback_data='triggers_delete'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('triggers_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_welcome_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('welcome_menu', chat_id).split('\n')[2], callback_data='welcome_set'),
+        types.InlineKeyboardButton(translate('welcome_menu', chat_id).split('\n')[3], callback_data='welcome_preview'),
+        types.InlineKeyboardButton(translate('welcome_menu', chat_id).split('\n')[4], callback_data='welcome_set_leave'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('welcome_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_flood_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('flood_menu', chat_id).split('\n')[2], callback_data='flood_enable'),
+        types.InlineKeyboardButton(translate('flood_menu', chat_id).split('\n')[3], callback_data='flood_set_limit'),
+        types.InlineKeyboardButton(translate('flood_menu', chat_id).split('\n')[4], callback_data='flood_stats'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('flood_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_broadcast_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[2], callback_data='broadcast_send'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[3], callback_data='broadcast_groups'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[4], callback_data='broadcast_preview'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('broadcast_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_blacklist_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[2], callback_data='blacklist_add'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_add_regex'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[4], callback_data='blacklist_list'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[5], callback_data='blacklist_remove'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('blacklist_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_advanced_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[0], callback_data='permissions_menu'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[0], callback_data='customcmd_menu'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[0], callback_data='polls_menu'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[0], callback_data='notes_menu'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[0], callback_data='rss_menu'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[0], callback_data='subs_menu'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[0], callback_data='fed_menu'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[0], callback_data='captcha_menu'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[0], callback_data='dump_menu'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[0], callback_data='plugins_menu'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('advanced_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_permissions_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='grant_role'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[3], callback_data='list_roles'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[4], callback_data='set_commands'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[5], callback_data='set_duration'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('permissions_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_customcmd_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_create'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[3], callback_data='customcmd_list'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[4], callback_data='customcmd_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('customcmd_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_polls_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[2], callback_data='poll_new'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_settings'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[4], callback_data='poll_active'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('polls_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_notes_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_save'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[3], callback_data='note_search'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[4], callback_data='note_share'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('notes_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_rss_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_add'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[3], callback_data='rss_list'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[4], callback_data='rss_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('rss_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_subs_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_grant'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[3], callback_data='sub_list'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[4], callback_data='sub_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('subs_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_fed_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_link'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[3], callback_data='fed_list'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[4], callback_data='fed_sync'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('fed_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_captcha_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[2], callback_data='captcha_set_type'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[3], callback_data='captcha_difficulty'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[4], callback_data='captcha_time_limit'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[5], callback_data='captcha_fail_action'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('captcha_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_dump_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[2], callback_data='dump_enable'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_channel'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[4], callback_data='dump_view'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('dump_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_plugins_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_install'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[3], callback_data='plugin_list'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[4], callback_data='plugin_config'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='advanced_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('plugins_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_moderation_lock_menu(chat_id, message):
+    settings = get_all_settings(chat_id)
+    links_status = safe_json(settings.get('moderation_lock_links', '{}')).get('status', 'off')
+    media_status = safe_json(settings.get('moderation_lock_media', '{}')).get('status', 'off')
+    stickers_status = safe_json(settings.get('moderation_lock_stickers', '{}')).get('status', 'off')
+    forwards_status = safe_json(settings.get('moderation_lock_forwards', '{}')).get('status', 'off')
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(f"🔗 Links: {'✅' if links_status == 'on' else '❌'}", callback_data='lock_links'),
+        types.InlineKeyboardButton(f"📸 Media: {'✅' if media_status == 'on' else '❌'}", callback_data='lock_media'),
+        types.InlineKeyboardButton(f"😀 Stickers: {'✅' if stickers_status == 'on' else '❌'}", callback_data='lock_stickers'),
+        types.InlineKeyboardButton(f"📤 Forwards: {'✅' if forwards_status == 'on' else '❌'}", callback_data='lock_forwards'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    sent_message = bot.send_message(chat_id, translate('moderation_lock_menu', chat_id, 
+                                                    links_status=links_status, 
+                                                    media_status=media_status, 
+                                                    stickers_status=stickers_status, 
+                                                    forwards_status=forwards_status), 
+                                  reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def show_lang_menu(chat_id, message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇬🇧 English", callback_data='lang_english'),
+        types.InlineKeyboardButton("🇮🇳 Hindi", callback_data='lang_hindi'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main')
+    )
+    sent_message = bot.send_message(chat_id, translate('lang_menu', chat_id), reply_markup=markup)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def triggers_add(chat_id, message, regex):
+    bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': int(regex), 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, f"Send {'regex pattern' if regex else 'keyword'} and response (format: keyword|response)")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def triggers_list(chat_id, message):
+    rows = safe_db_operation("SELECT keyword, response, regex FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
+    text = "🎯 Triggers:\n" + ("\n".join(f"{'[regex] ' if r[2] else ''}{r[0]}: {r[1]}" for r in rows) if rows else "No triggers!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def triggers_edit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'triggers_edit', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send keyword to edit:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def triggers_delete(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'triggers_delete', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send keyword to delete:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def welcome_set(chat_id, message, is_welcome):
+    bot.temp_data[chat_id] = {'action': 'welcome_set_welcome' if is_welcome else 'welcome_set_leave', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, f"Send {'welcome' if is_welcome else 'leave'} message:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def welcome_preview(chat_id, message):
+    welcome_msg = get_welcome(chat_id, True)
+    leave_msg = get_welcome(chat_id, False)
+    text = f"👋 Welcome: {welcome_msg}\n🚪 Leave: {leave_msg}"
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def flood_enable(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'flood_enable', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send 'on' or 'off':")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def flood_set_limit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'flood_set_limit', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send message limit per minute (1-50):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def flood_stats(chat_id, message):
+    rows = safe_db_operation("SELECT user_id, COUNT(*) FROM analytics WHERE chat_id=? AND action LIKE 'flood_%' GROUP BY user_id", 
+                            (chat_id,), "fetch")
+    text = "🛡️ Flood Stats:\n" + ("\n".join(f"User {r[0]}: {r[1]} incidents" for r in rows) if rows else "No flood incidents!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def broadcast_send(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'broadcast_send', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send broadcast message:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def broadcast_groups(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'broadcast_groups', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send group IDs (comma-separated):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def broadcast_preview(chat_id, message):
+    rows = safe_db_operation("SELECT message FROM broadcasts WHERE chat_id=? AND sent=0", (chat_id,), "fetch")
+    text = "📢 Pending Broadcasts:\n" + ("\n".join(f"{r[0]}" for r in rows) if rows else "No pending broadcasts!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def blacklist_add(chat_id, message, regex):
+    bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': int(regex), 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, f"Send {'regex pattern' if regex else 'word'} to blacklist:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def blacklist_list(chat_id, message):
+    rows = safe_db_operation("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
+    text = "🚫 Blacklist:\n" + ("\n".join(f"{'[regex] ' if r[1] else ''}{r[0]}" for r in rows) if rows else "No blacklist!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def blacklist_remove(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'blacklist_remove', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send word to remove from blacklist:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def grant_role(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'grant_role', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send user ID and role (format: @user role):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def list_roles(chat_id, message):
+    rows = safe_db_operation("SELECT user_id, role, duration FROM permissions WHERE chat_id=?", (chat_id,), "fetch")
+    text = "👑 Roles:\n" + ("\n".join(f"User {r[0]}: {r[1]} ({r[2]})" for r in rows) if rows else "No roles assigned!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def set_commands(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'set_commands', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send user ID and commands (format: @user cmd1,cmd2):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def set_duration(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'set_duration', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send user ID and duration (format: @user 1d):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def customcmd_create(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'customcmd_create', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send command and response (format: /cmd|response):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def customcmd_list(chat_id, message):
+    rows = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
+    text = "⚙️ Custom Commands:\n" + ("\n".join(f"/{r[0]}: {r[1]}" for r in rows) if rows else "No custom commands!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def customcmd_edit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'customcmd_edit', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send command to edit (format: /cmd):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def poll_new(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'poll_new', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send poll details (format: question|option1,option2|anonymous|timer):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def poll_settings(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'poll_settings', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send poll ID and settings (format: poll_id|anonymous|timer):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def poll_active(chat_id, message):
+    rows = safe_db_operation("SELECT poll_id, question FROM polls WHERE chat_id=?", (chat_id,), "fetch")
+    text = "📊 Active Polls:\n" + ("\n".join(f"ID {r[0]}: {r[1]}" for r in rows) if rows else "No active polls!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def note_save(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'note_save', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send note tag and content (format: tag|content):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def note_search(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'note_search', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send tag to search:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def note_share(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'note_share', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send tag to share:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def rss_add(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'rss_add', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send RSS details (format: url|keywords|interval|format):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def rss_list(chat_id, message):
+    rows = safe_db_operation("SELECT url, keywords, interval FROM rss_feeds WHERE chat_id=?", (chat_id,), "fetch")
+    text = "📰 RSS Feeds:\n" + ("\n".join(f"URL: {r[0]}, Keywords: {r[1]}, Interval: {r[2]}" for r in rows) if rows else "No RSS feeds!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def rss_edit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'rss_edit', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send RSS details to edit (format: url|keywords|interval|format):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def sub_grant(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'sub_grant', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send user ID, plan, and duration (format: @user plan duration):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def sub_list(chat_id, message):
+    rows = safe_db_operation("SELECT user_id, plan, duration FROM subscriptions WHERE chat_id=?", (chat_id,), "fetch")
+    text = "💰 Subscriptions:\n" + ("\n".join(f"User {r[0]}: {r[1]} ({r[2]})" for r in rows) if rows else "No subscriptions!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def sub_edit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'sub_edit', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send user ID, plan, and duration (format: @user plan duration):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def fed_link(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'fed_link', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send group ID to link:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def fed_list(chat_id, message):
+    rows = safe_db_operation("SELECT linked_group, sync_actions FROM federations WHERE chat_id=?", (chat_id,), "fetch")
+    text = "🔗 Federated Groups:\n" + ("\n".join(f"Group {r[0]}: {r[1]}" for r in rows) if rows else "No federated groups!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def fed_sync(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'fed_sync', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send actions to sync (comma-separated):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def captcha_set_type(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send captcha type, difficulty, time limit, and fail action (format: type difficulty time action):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def captcha_difficulty(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send captcha type, difficulty, time limit, and fail action (format: type difficulty time action):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def captcha_time_limit(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send captcha type, difficulty, time limit, and fail action (format: type difficulty time action):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def captcha_fail_action(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'captcha_set', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send captcha type, difficulty, time limit, and fail action (format: type difficulty time action):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def dump_enable(chat_id, message):
+    settings = get_all_settings(chat_id)
+    current_status = safe_json(settings.get('message_dump', '{}')).get('status', 'off')
+    new_status = 'off' if current_status == 'on' else 'on'
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
+                       (chat_id, 'message_dump', 'status', json.dumps({'status': new_status}))):
+        sent_message = bot.send_message(chat_id, translate('dump_enabled', chat_id, status=new_status))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    else:
+        sent_message = bot.send_message(chat_id, translate('dump_error', chat_id))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def dump_channel(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'dump_set', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send channel ID for message dump:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def dump_view(chat_id, message):
+    rows = safe_db_operation("SELECT deleted_msg, user_id, timestamp FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+    text = "💾 Deleted Messages:\n" + ("\n".join(f"User {r[1]} at {r[2]}: {r[0]}" for r in rows) if rows else "No deleted messages!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def plugin_install(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'plugin_install', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send plugin name to install:")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def plugin_list(chat_id, message):
+    rows = safe_db_operation("SELECT plugin_name, config, active FROM plugins WHERE chat_id=?", (chat_id,), "fetch")
+    text = "🔌 Plugins:\n" + ("\n".join(f"{r[0]}: {'Active' if r[2] else 'Inactive'} ({r[1]})" for r in rows) if rows else "No plugins!")
+    sent_message = bot.send_message(chat_id, text)
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def plugin_config(chat_id, message):
+    bot.temp_data[chat_id] = {'action': 'plugin_config', 'timeout': time.time() + 300}
+    sent_message = bot.send_message(chat_id, "Send plugin name and config (format: name|config):")
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def toggle_lock(chat_id, message, action):
+    settings = get_all_settings(chat_id)
+    key = f"moderation_lock_{action}"
+    current_status = safe_json(settings.get(key, '{}')).get('status', 'off')
+    new_status = 'off' if current_status == 'on' else 'on'
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
+                       (chat_id, 'moderation', f"lock_{action}", json.dumps({'status': new_status}))):
+        sent_message = bot.send_message(chat_id, translate('lock_set', chat_id, action=action.capitalize(), status=new_status))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    else:
+        sent_message = bot.send_message(chat_id, translate('lock_error', chat_id, action=action.capitalize()))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+def set_language(chat_id, message, lang):
+    lang_code = 'en' if lang == 'english' else 'hi'
+    if safe_db_operation("INSERT OR REPLACE INTO language_settings VALUES (?, ?)", (chat_id, lang_code)):
+        sent_message = bot.send_message(chat_id, translate('lang_set', chat_id, lang=lang))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    else:
+        sent_message = bot.send_message(chat_id, translate('lang_error', chat_id))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 # NEW CHAT MEMBERS
 @bot.message_handler(content_types=['new_chat_members'])
 def new_member(message):
     chat_id = str(message.chat.id)
     settings = get_all_settings(chat_id)
-    if safe_json(settings.get('moderation_captcha', '{}')).get('status') == 'on':
+    captcha_settings = safe_json(settings.get('moderation_captcha', '{}'))
+    
+    if captcha_settings.get('status', 'off') == 'on':
         for user in message.new_chat_members:
             captcha = generate_captcha()
             markup = types.InlineKeyboardMarkup(row_width=2)
@@ -2347,46 +2391,56 @@ def new_member(message):
                 markup.add(types.InlineKeyboardButton(opt, callback_data=f"captcha_{user.id}_{opt}"))
             bot.temp_data[f"captcha_{chat_id}_{user.id}"] = {
                 'answer': captcha['answer'],
-                'timeout': time.time() + 300
+                'timeout': time.time() + captcha_settings.get('time_limit', 300),
+                'fail_action': captcha_settings.get('fail_action', 'kick')
             }
-            sent_message = bot.send_message(chat_id, f"Welcome {user.first_name}! {captcha['question']}", reply_markup=markup)
+            sent_message = bot.send_message(chat_id, f"Welcome {user.first_name}! Solve this captcha: {captcha['question']}", reply_markup=markup)
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    
-    welcome_msg = get_welcome(chat_id)
-    sent_message = bot.send_message(chat_id, welcome_msg)
+    else:
+        sent_message = bot.send_message(chat_id, get_welcome(chat_id))
+        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
+# LEFT CHAT MEMBER
+@bot.message_handler(content_types=['left_chat_member'])
+def left_member(message):
+    chat_id = str(message.chat.id)
+    sent_message = bot.send_message(chat_id, get_welcome(chat_id, False))
     bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
-# CAPTCHA VALIDATION
+# CAPTCHA CALLBACK
 @bot.callback_query_handler(func=lambda call: call.data.startswith('captcha_'))
-def captcha_validation(call):
+def captcha_callback(call):
     chat_id = str(call.message.chat.id)
     user_id, answer = call.data.split('_')[1:]
-    key = f"captcha_{chat_id}_{user_id}"
+    captcha_key = f"captcha_{chat_id}_{user_id}"
     
-    if key in bot.temp_data:
-        correct = bot.temp_data[key]['answer']
-        delete_previous_reply(chat_id)
-        if answer == correct:
-            del bot.temp_data[key]
-            sent_message = bot.send_message(chat_id, translate('captcha_verified', chat_id))
+    if captcha_key not in bot.temp_data:
+        bot.answer_callback_query(call.id, "Captcha expired!")
+        return
+    
+    captcha = bot.temp_data[captcha_key]
+    if time.time() > captcha['timeout']:
+        bot.answer_callback_query(call.id, translate('captcha_timeout', chat_id))
+        if captcha['fail_action'] == 'kick':
+            bot.kick_chat_member(chat_id, user_id)
         else:
-            rows = safe_db_operation("SELECT fail_action FROM captchas WHERE chat_id=?", (chat_id,), "fetch")
-            action = rows[0][0] if rows else 'kick'
-            try:
-                if action == 'kick':
-                    bot.kick_chat_member(chat_id, user_id)
-                else:
-                    bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False})
-                sent_message = bot.send_message(chat_id, translate('captcha_wrong', chat_id))
-            except:
-                sent_message = bot.send_message(chat_id, translate('captcha_timeout', chat_id))
-            del bot.temp_data[key]
-        bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-    bot.answer_callback_query(call.id)
+            bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False})
+        del bot.temp_data[captcha_key]
+        return
+    
+    if answer == captcha['answer']:
+        bot.answer_callback_query(call.id, translate('captcha_verified', chat_id))
+        bot.delete_message(chat_id, call.message.message_id)
+        del bot.temp_data[captcha_key]
+    else:
+        bot.answer_callback_query(call.id, translate('captcha_wrong', chat_id))
 
-# START POLLING
-try:
-    bot.infinity_polling()
-except Exception as e:
-    logging.error(f"Bot polling error: {e}")
-    time.sleep(5)
+# RUN BOT
+if __name__ == '__main__':
+    try:
+        logging.info("Bot starting...")
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    except Exception as e:
+        logging.error(f"Infinity polling exception: {e}")
+        time.sleep(5)
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
