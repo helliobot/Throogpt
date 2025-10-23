@@ -1,6 +1,10 @@
-from flask import Flask, request
-from libsql import connect  # Turso SQLite के लिए
-import telebot, os, json, time, random, re
+import sqlite3  # Turso की जगह SQLite3
+import telebot
+import os
+import json
+import time
+import random
+import re
 from telebot import types
 from dotenv import load_dotenv
 from collections import defaultdict
@@ -9,10 +13,9 @@ from datetime import datetime, timedelta
 from threading import Lock, Thread
 import html
 
-# Logging setup
+# Logging setup (Choreo के लिए stdout पर)
 logging.basicConfig(
     level=logging.INFO,
-    filename='/tmp/bot.log',  # Vercel में राइटेबल /tmp डायरेक्टरी
     format='%(asctime)s %(levelname)s: %(message)s'
 )
 
@@ -20,7 +23,6 @@ logging.basicConfig(
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
-app = Flask(__name__)
 
 # Global locks and caches
 flood_locks = defaultdict(Lock)
@@ -417,7 +419,7 @@ translations = {
 # DATABASE SETUP (ALL TABLES WITH INDEXES)
 def init_db():
     try:
-        conn = connect(os.getenv('TURSO_DATABASE_URL'), auth_token=os.getenv('TURSO_AUTH_TOKEN'))
+        conn = sqlite3.connect('bot.db')  # SQLite3 डेटाबेस
         c = conn.cursor()
         
         # Core tables
@@ -470,7 +472,7 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS plugins 
                      (chat_id TEXT, plugin_name TEXT, config TEXT, active INTEGER)''')
         c.execute('''CREATE TABLE IF NOT EXISTS language_settings 
-                     (chat_id TEXT, language TEXT)''')  # New table for language settings
+                     (chat_id TEXT, language TEXT)''')
         
         # Indexes for performance
         for table in ['settings', 'responses', 'schedules', 'blocks', 'warns', 'logs', 'analytics', 'triggers', 'welcome', 'flood_settings', 
@@ -490,7 +492,7 @@ init_db()
 def get_language(chat_id):
     """Get the language for a chat, default to English."""
     try:
-        conn = connect(os.getenv('TURSO_DATABASE_URL'), auth_token=os.getenv('TURSO_AUTH_TOKEN'))
+        conn = sqlite3.connect('bot.db')
         c = conn.cursor()
         c.execute("SELECT language FROM language_settings WHERE chat_id=?", (chat_id,))
         result = c.fetchone()
@@ -553,7 +555,7 @@ def is_creator_or_admin(bot, chat_id, user_id):
             status = bot.get_chat_member(chat_id, user_id).status
             if status == 'creator':
                 return True
-            conn = connect(os.getenv('TURSO_DATABASE_URL'), auth_token=os.getenv('TURSO_AUTH_TOKEN'))
+            conn = sqlite3.connect('bot.db')
             c = conn.cursor()
             c.execute("SELECT role FROM permissions WHERE chat_id=? AND user_id=?", (chat_id, str(user_id)))
             role = c.fetchone()
@@ -566,7 +568,7 @@ def is_creator_or_admin(bot, chat_id, user_id):
 def safe_db_operation(query, params, operation="execute"):
     """Safely execute database operations with error handling."""
     try:
-        conn = connect(os.getenv('TURSO_DATABASE_URL'), auth_token=os.getenv('TURSO_AUTH_TOKEN'))
+        conn = sqlite3.connect('bot.db')
         c = conn.cursor()
         if operation == "execute":
             c.execute(query, params)
@@ -1269,20 +1271,20 @@ def handle_flood_set_limit(message):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('flood_limit_set', chat_id, limit=limit))
         else:
-            bot.reply_to(message, translate('flood_limit_set', chat_id, limit='error'))
+            bot.reply_to(message, translate('flood_limit_set', chat_id).replace("set", "error setting"))
     except ValueError:
         bot.reply_to(message, translate('flood_invalid_number', chat_id))
 
-# BROADCAST MENU (जारी)
+# BROADCAST MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'broadcast_menu')
 def broadcast_menu(call):
     chat_id = str(call.message.chat.id)
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[1], callback_data='broadcast_send'),
-        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[2], callback_data='broadcast_groups'),
-        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[3], callback_data='broadcast_preview'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[2], callback_data='broadcast_send'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[3], callback_data='broadcast_groups'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[4], callback_data='broadcast_preview'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1295,31 +1297,20 @@ def broadcast_action(call):
     
     if action == 'send':
         bot.temp_data[chat_id] = {'action': 'broadcast_send', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='broadcast_menu'),
-            types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[3], callback_data='broadcast_preview')
-        )
-        bot.edit_message_text("📢 Send broadcast message:", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = translate('broadcast_menu', chat_id).split('\n')[0] + ": Send the broadcast message:"
     elif action == 'groups':
         bot.temp_data[chat_id] = {'action': 'broadcast_groups', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='broadcast_menu'),
-            types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send')
-        )
-        bot.edit_message_text("👥 Send group IDs (comma-separated):", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "👥 Send group IDs (comma-separated):"
     elif action == 'preview':
         rows = safe_db_operation("SELECT message FROM broadcasts WHERE chat_id=? AND sent=0", (chat_id,), "fetch")
-        text = rows[0][0] if rows else "No broadcast message set."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+        text = rows[0][0] if rows else "📋 No broadcast message set."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu'),
+        types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_broadcast_send(message):
     chat_id = str(message.chat.id)
@@ -1329,27 +1320,7 @@ def handle_broadcast_send(message):
         del bot.temp_data[chat_id]
         bot.reply_to(message, translate('broadcast_menu', chat_id).split('\n')[0] + ": Message saved for broadcast!")
     else:
-        bot.reply_to(message, translate('broadcast_menu', chat_id).split('\n')[0] + ": Error saving message.")
-
-def handle_broadcast_groups(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    group_ids = [g.strip() for g in message.text.split(',')]
-    rows = safe_db_operation("SELECT message FROM broadcasts WHERE chat_id=? AND sent=0", (chat_id,), "fetch")
-    if not rows:
-        return bot.reply_to(message, "No broadcast message set.")
-    msg = rows[0][0]
-    for gid in group_ids:
-        try:
-            bot.send_message(gid, msg)
-            log_activity(gid, message.from_user.id, 'broadcast_sent')
-        except Exception as e:
-            logging.error(f"Broadcast error for {gid}: {e}")
-    if safe_db_operation("UPDATE broadcasts SET sent=1 WHERE chat_id=?", (chat_id,)):
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, translate('broadcast_menu', chat_id).split('\n')[0] + ": Broadcast sent!")
-    else:
-        bot.reply_to(message, translate('broadcast_menu', chat_id).split('\n')[0] + ": Error sending broadcast.")
+        bot.reply_to(message, "❌ Error saving broadcast message!")
 
 # BLACKLIST MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'blacklist_menu')
@@ -1358,10 +1329,10 @@ def blacklist_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[1], callback_data='blacklist_add_word'),
-        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[2], callback_data='blacklist_add_regex'),
-        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_list'),
-        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[4], callback_data='blacklist_remove'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[2], callback_data='blacklist_add_word'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_add_regex'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[4], callback_data='blacklist_list'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[5], callback_data='blacklist_remove'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1372,59 +1343,40 @@ def blacklist_action(call):
     action = call.data.split('_')[1]
     chat_id = str(call.message.chat.id)
     
-    if action in ['add_word', 'add_regex']:
+    if action == 'add_word' or action == 'add_regex':
         bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 1 if 'regex' in action else 0, 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='blacklist_menu'),
-            types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_list')
-        )
-        bot.edit_message_text(f"Send {'regex pattern' if 'regex' in action else 'word'} to blacklist:", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send word or regex to blacklist:"
     elif action == 'list':
-        blacklists = safe_db_operation("SELECT word FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('blacklist_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {w[0]}" for w in blacklists) or "No blacklisted words."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[1], callback_data='blacklist_add_word'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
+        bl = safe_db_operation("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('blacklist_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {w} {'(regex)' if r else ''}" for w, r in bl) or "No blacklisted words."
     elif action == 'remove':
         bot.temp_data[chat_id] = {'action': 'blacklist_remove', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='blacklist_menu'),
-            types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_list')
-        )
-        bot.edit_message_text("Send word to remove from blacklist:", chat_id, call.message.message_id, reply_markup=markup)
+        text = "Send word/regex to remove from blacklist:"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='blacklist_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_blacklist_add(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     word = sanitize_input(message.text)
-    if bot.temp_data[chat_id]['regex'] and not validate_regex(word):
+    regex = bot.temp_data[chat_id]['regex']
+    
+    if regex and not validate_regex(word):
         return bot.reply_to(message, translate('invalid_regex', chat_id))
     if len(word) > 100:
         return bot.reply_to(message, translate('blacklist_too_long', chat_id))
     if safe_db_operation("SELECT 1 FROM blacklists WHERE chat_id=? AND word=?", (chat_id, word), "fetch"):
         return bot.reply_to(message, translate('blacklist_exists', chat_id))
-    if safe_db_operation("INSERT INTO blacklists VALUES (?, ?, ?)", (chat_id, word, bot.temp_data[chat_id]['regex'])):
+    if safe_db_operation("INSERT INTO blacklists VALUES (?, ?, ?)", (chat_id, word, regex)):
         del bot.temp_data[chat_id]
         bot.reply_to(message, translate('blacklist_added', chat_id))
     else:
         bot.reply_to(message, translate('blacklist_added', chat_id).replace("added", "error adding"))
-
-def handle_blacklist_remove(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    word = sanitize_input(message.text)
-    if safe_db_operation("DELETE FROM blacklists WHERE chat_id=? AND word=?", (chat_id, word)):
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, translate('blacklist_menu', chat_id).split('\n')[0] + ": Word removed!")
-    else:
-        bot.reply_to(message, translate('blacklist_menu', chat_id).split('\n')[0] + ": Word not found!")
 
 # PERMISSIONS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'permissions_menu')
@@ -1433,10 +1385,10 @@ def permissions_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[1], callback_data='permissions_grant'),
-        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_list'),
-        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[3], callback_data='permissions_commands'),
-        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[4], callback_data='permissions_duration'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_grant'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[3], callback_data='permissions_list'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[4], callback_data='permissions_commands'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[5], callback_data='permissions_duration'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1449,89 +1401,34 @@ def permissions_action(call):
     
     if action == 'grant':
         bot.temp_data[chat_id] = {'action': 'grant_role', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='permissions_menu'),
-            types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_list')
-        )
-        bot.edit_message_text("Send: @username role (e.g., @user ADMIN)", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send user ID and role (e.g., @username ADMIN):"
     elif action == 'list':
         roles = safe_db_operation("SELECT user_id, role FROM permissions WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('permissions_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {r[0]}: {r[1]}" for r in roles) or "No roles assigned."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[1], callback_data='permissions_grant'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+        text = translate('permissions_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {uid}: {role}" for uid, role in roles) or "No roles assigned."
+    elif action == 'commands' or action == 'duration':
+        bot.temp_data[chat_id] = {'action': f'permissions_{action}', 'timeout': time.time() + 300}
+        text = f"Send user ID and {'commands' if action == 'commands' else 'duration (e.g., 1d)'}:"
     
-    elif action == 'commands':
-        bot.temp_data[chat_id] = {'action': 'permissions_commands', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='permissions_menu'),
-            types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_list')
-        )
-        bot.edit_message_text("Send role and commands (e.g., ADMIN:/warn,/ban)", chat_id, call.message.message_id, reply_markup=markup)
-    
-    elif action == 'duration':
-        bot.temp_data[chat_id] = {'action': 'permissions_duration', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='permissions_menu'),
-            types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_list')
-        )
-        bot.edit_message_text("Send: @username duration (e.g., @user 1d)", chat_id, call.message.message_id, reply_markup=markup)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'),
+        types.InlineKeyboardButton("📋 List", callback_data='permissions_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_grant_input(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        username, role = message.text.split()
-        username = sanitize_input(username)
+        user_id, role = message.text.split()
+        user_id = user_id.strip('@')
         role = role.upper()
         if role not in ['ADMIN', 'MOD']:
             return bot.reply_to(message, translate('role_error', chat_id))
-        user_id = username.strip('@')
         if safe_db_operation("INSERT OR REPLACE INTO permissions VALUES (?, ?, ?, ?, ?)", 
-                           (chat_id, user_id, role, '', '')):
+                           (chat_id, user_id, role, json.dumps([]), '0')):
             del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('role_granted', chat_id, role=role, user_name=username, user_id=user_id))
-        else:
-            bot.reply_to(message, translate('role_error', chat_id))
-    except ValueError:
-        bot.reply_to(message, translate('role_error', chat_id))
-
-def handle_permissions_commands(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    try:
-        role, commands = message.text.split(':', 1)
-        role = role.upper()
-        if role not in ['ADMIN', 'MOD']:
-            return bot.reply_to(message, translate('role_error', chat_id))
-        if safe_db_operation("UPDATE permissions SET commands=? WHERE chat_id=? AND role=?", 
-                           (commands, chat_id, role)):
-            del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('permissions_menu', chat_id).split('\n')[0] + ": Commands updated!")
-        else:
-            bot.reply_to(message, translate('role_error', chat_id))
-    except ValueError:
-        bot.reply_to(message, translate('role_error', chat_id))
-
-def handle_permissions_duration(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    try:
-        username, duration = message.text.split()
-        if not validate_time_format(duration):
-            return bot.reply_to(message, translate('note_invalid_expire', chat_id))
-        user_id = username.strip('@')
-        if safe_db_operation("UPDATE permissions SET duration=? WHERE chat_id=? AND user_id=?", 
-                           (duration, chat_id, user_id)):
-            del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('permissions_menu', chat_id).split('\n')[0] + ": Duration updated!")
+            bot.reply_to(message, translate('role_granted', chat_id, role=role, user_name=user_id, user_id=user_id))
         else:
             bot.reply_to(message, translate('role_error', chat_id))
     except ValueError:
@@ -1544,9 +1441,9 @@ def customcmd_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[1], callback_data='customcmd_create'),
-        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_list'),
-        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[3], callback_data='customcmd_edit'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_create'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[3], callback_data='customcmd_list'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[4], callback_data='customcmd_edit'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1559,45 +1456,34 @@ def customcmd_action(call):
     
     if action == 'create':
         bot.temp_data[chat_id] = {'action': 'customcmd_create', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='customcmd_menu'),
-            types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_list')
-        )
-        bot.edit_message_text("Send: /command response (e.g., /hello Hi there!)", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send command and response (e.g., /hello|Hi there!):"
     elif action == 'list':
-        commands = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('customcmd_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• /{t}: {r}" for t, r in commands) or "No custom commands."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[1], callback_data='customcmd_create'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
+        cmds = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('customcmd_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• /{t}: {r}" for t, r in cmds) or "No custom commands."
     elif action == 'edit':
         bot.temp_data[chat_id] = {'action': 'customcmd_edit', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='customcmd_menu'),
-            types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_list')
-        )
-        bot.edit_message_text("Send command to edit (e.g., /hello):", chat_id, call.message.message_id, reply_markup=markup)
+        text = "Send command to edit (e.g., /hello):"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='customcmd_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_customcmd_create(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        cmd, resp = message.text.split(' ', 1)
-        cmd = sanitize_input(cmd.strip('/'))
-        resp = sanitize_input(resp)
-        if len(cmd) > 50 or len(resp) > 1000:
+        trigger, response = message.text.split('|', 1)
+        trigger = sanitize_input(trigger.strip('/ '))
+        response = sanitize_input(response.strip())
+        if len(trigger) > 50 or len(response) > 1000:
             return bot.reply_to(message, translate('command_too_long', chat_id))
-        if safe_db_operation("SELECT 1 FROM custom_commands WHERE chat_id=? AND trigger=?", (chat_id, cmd), "fetch"):
+        if safe_db_operation("SELECT 1 FROM custom_commands WHERE chat_id=? AND trigger=?", (chat_id, trigger), "fetch"):
             return bot.reply_to(message, translate('command_exists', chat_id))
         if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", 
-                           (chat_id, cmd, resp, 'all', '')):
+                           (chat_id, trigger, response, 'all', json.dumps([]))):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('command_added', chat_id))
         else:
@@ -1612,9 +1498,9 @@ def polls_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[1], callback_data='poll_new'),
-        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[2], callback_data='poll_settings'),
-        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_active'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[2], callback_data='poll_new'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_settings'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[4], callback_data='poll_active'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1627,46 +1513,33 @@ def poll_action(call):
     
     if action == 'new':
         bot.temp_data[chat_id] = {'action': 'poll_new', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='polls_menu'),
-            types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_active')
-        )
-        bot.edit_message_text("Send: question|option1,option2|anonymous|timer (e.g., Favorite color?|Red,Blue|yes|1h)", 
-                             chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send poll question and options (e.g., Question?|Option1,Option2|anonymous|timer):"
     elif action == 'settings':
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'),
-            types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_active')
-        )
-        bot.edit_message_text("Poll settings: Under development.", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "⚙️ Poll settings: Not implemented yet."
     elif action == 'active':
         polls = safe_db_operation("SELECT poll_id, question FROM polls WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('polls_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {p[0]}: {p[1]}" for p in polls) or "No active polls."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[1], callback_data='poll_new'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+        text = translate('polls_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {pid}: {q}" for pid, q in polls) or "No active polls."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'),
+        types.InlineKeyboardButton("📊 Active", callback_data='poll_active')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_poll_new(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
         question, options, anon, timer = message.text.split('|')
-        question = sanitize_input(question)
-        options = [sanitize_input(o.strip()) for o in options.split(',')]
-        anon = 1 if anon.lower() == 'yes' else 0
-        if not validate_time_format(timer):
-            return bot.reply_to(message, translate('poll_invalid', chat_id))
+        options = options.split(',')
+        anon = 1 if anon.lower() == 'true' else 0
+        timer = parse_time(timer) if validate_time_format(timer) else 86400
+        poll_id = str(random.randint(1000, 9999))
         if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                           (chat_id, str(message.message_id), question, json.dumps(options), anon, timer, '')):
+                           (chat_id, poll_id, question, json.dumps(options), anon, timer, json.dumps({}))):
             del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('poll_created', chat_id, poll_id=message.message_id))
+            bot.reply_to(message, translate('poll_created', chat_id, poll_id=poll_id))
         else:
             bot.reply_to(message, translate('poll_invalid', chat_id))
     except ValueError:
@@ -1679,9 +1552,9 @@ def notes_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[1], callback_data='note_save'),
-        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_search'),
-        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[3], callback_data='note_share'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_save'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[3], callback_data='note_search'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[4], callback_data='note_share'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1694,60 +1567,34 @@ def note_action(call):
     
     if action == 'save':
         bot.temp_data[chat_id] = {'action': 'note_save', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='notes_menu'),
-            types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_search')
-        )
-        bot.edit_message_text("Send: #tag content|expire (e.g., #info Rules here|1d)", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send note tag and content (e.g., tag|content|expire):"
     elif action == 'search':
         notes = safe_db_operation("SELECT tag, content FROM notes WHERE chat_id=?", (chat_id,), "fetch")
         text = translate('notes_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {t}: {c}" for t, c in notes) or "No notes."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[1], callback_data='note_save'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
     elif action == 'share':
-        bot.temp_data[chat_id] = {'action': 'note_share', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='notes_menu'),
-            types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_search')
-        )
-        bot.edit_message_text("Send #tag to share:", chat_id, call.message.message_id, reply_markup=markup)
+        text = "📤 Note sharing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu'),
+        types.InlineKeyboardButton("🔍 Search", callback_data='note_search')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_note_save(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        tag_content, expire = message.text.split('|')
-        tag = sanitize_input(tag_content.split(' ', 1)[0])
-        content = sanitize_input(tag_content.split(' ', 1)[1] if ' ' in tag_content else '')
+        tag, content, expire = message.text.split('|')
         if not validate_time_format(expire):
             return bot.reply_to(message, translate('note_invalid_expire', chat_id))
-        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", 
-                           (chat_id, tag, content, expire)):
+        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", (chat_id, tag, content, expire)):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('note_saved', chat_id))
         else:
             bot.reply_to(message, translate('note_saved', chat_id).replace("saved", "error saving"))
     except ValueError:
         bot.reply_to(message, translate('note_invalid_expire', chat_id))
-
-def handle_note_share(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    tag = sanitize_input(message.text)
-    rows = safe_db_operation("SELECT content FROM notes WHERE chat_id=? AND tag=?", (chat_id, tag), "fetch")
-    if rows:
-        bot.reply_to(message, f"{tag}: {rows[0][0]}")
-        del bot.temp_data[chat_id]
-    else:
-        bot.reply_to(message, translate('notes_menu', chat_id).split('\n')[0] + ": Note not found!")
 
 # RSS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'rss_menu')
@@ -1756,9 +1603,9 @@ def rss_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[1], callback_data='rss_add'),
-        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_list'),
-        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[3], callback_data='rss_edit'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_add'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[3], callback_data='rss_list'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[4], callback_data='rss_edit'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1771,66 +1618,35 @@ def rss_action(call):
     
     if action == 'add':
         bot.temp_data[chat_id] = {'action': 'rss_add', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='rss_menu'),
-            types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_list')
-        )
-        bot.edit_message_text("Send: url|keywords|interval|format (e.g., https://example.com/feed|news|1h|text)", 
-                             chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send RSS URL, keywords, interval (e.g., url|keywords|1h):"
     elif action == 'list':
         feeds = safe_db_operation("SELECT url, keywords FROM rss_feeds WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('rss_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {u}: {k}" for u, k in feeds) or "No RSS feeds."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[1], callback_data='rss_add'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = translate('rss_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {url}: {kw}" for url, kw in feeds) or "No RSS feeds."
     elif action == 'edit':
-        bot.temp_data[chat_id] = {'action': 'rss_edit', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='rss_menu'),
-            types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_list')
-        )
-        bot.edit_message_text("Send URL to edit:", chat_id, call.message.message_id, reply_markup=markup)
+        text = "✏️ RSS editing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='rss_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_rss_add(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        url, keywords, interval, fmt = message.text.split('|')
+        url, keywords, interval = message.text.split('|')
         if not validate_url(url):
             return bot.reply_to(message, translate('rss_invalid_url', chat_id))
         if not validate_time_format(interval):
             return bot.reply_to(message, translate('rss_invalid_interval', chat_id))
         if safe_db_operation("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", 
-                           (chat_id, url, keywords, interval, fmt)):
+                           (chat_id, url, keywords, interval, 'default')):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('rss_added', chat_id))
         else:
             bot.reply_to(message, translate('rss_added', chat_id).replace("added", "error adding"))
-    except ValueError:
-        bot.reply_to(message, translate('rss_invalid_url', chat_id))
-
-def handle_rss_edit(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    try:
-        url, keywords, interval, fmt = message.text.split('|')
-        if not validate_url(url):
-            return bot.reply_to(message, translate('rss_invalid_url', chat_id))
-        if not validate_time_format(interval):
-            return bot.reply_to(message, translate('rss_invalid_interval', chat_id))
-        if safe_db_operation("UPDATE rss_feeds SET keywords=?, interval=?, format=? WHERE chat_id=? AND url=?", 
-                           (keywords, interval, fmt, chat_id, url)):
-            del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('rss_menu', chat_id).split('\n')[0] + ": Feed updated!")
-        else:
-            bot.reply_to(message, translate('rss_menu', chat_id).split('\n')[0] + ": Feed not found!")
     except ValueError:
         bot.reply_to(message, translate('rss_invalid_url', chat_id))
 
@@ -1841,9 +1657,9 @@ def subs_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[1], callback_data='sub_grant'),
-        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_list'),
-        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[3], callback_data='sub_edit'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_grant'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[3], callback_data='sub_list'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[4], callback_data='sub_edit'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1856,63 +1672,33 @@ def sub_action(call):
     
     if action == 'grant':
         bot.temp_data[chat_id] = {'action': 'sub_grant', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='subs_menu'),
-            types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_list')
-        )
-        bot.edit_message_text("Send: @username plan duration (e.g., @user premium 1m)", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send user ID, plan, duration (e.g., @username|premium|1m):"
     elif action == 'list':
-        subs = safe_db_operation("SELECT user_id, plan, duration FROM subscriptions WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('subs_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {s[0]}: {s[1]} ({s[2]})" for s in subs) or "No subscriptions."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[1], callback_data='sub_grant'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
+        subs = safe_db_operation("SELECT user_id, plan FROM subscriptions WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('subs_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {uid}: {plan}" for uid, plan in subs) or ",no subscriptions."
     elif action == 'edit':
-        bot.temp_data[chat_id] = {'action': 'sub_edit', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='subs_menu'),
-            types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_list')
-        )
-        bot.edit_message_text("Send: @username new_plan new_duration", chat_id, call.message.message_id, reply_markup=markup)
+        text = "✏️ Subscription editing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='sub_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_sub_grant(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        username, plan, duration = message.text.split()
+        user_id, plan, duration = message.text.split('|')
         if not validate_time_format(duration):
             return bot.reply_to(message, translate('sub_invalid_duration', chat_id))
-        user_id = username.strip('@')
         if safe_db_operation("INSERT INTO subscriptions VALUES (?, ?, ?, ?, 1)", 
-                           (chat_id, user_id, plan, duration)):
+                           (chat_id, user_id.strip('@'), plan, duration)):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('sub_granted', chat_id))
         else:
             bot.reply_to(message, translate('sub_granted', chat_id).replace("granted", "error granting"))
-    except ValueError:
-        bot.reply_to(message, translate('sub_invalid_duration', chat_id))
-
-def handle_sub_edit(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    try:
-        username, plan, duration = message.text.split()
-        if not validate_time_format(duration):
-            return bot.reply_to(message, translate('sub_invalid_duration', chat_id))
-        user_id = username.strip('@')
-        if safe_db_operation("UPDATE subscriptions SET plan=?, duration=? WHERE chat_id=? AND user_id=?", 
-                           (plan, duration, chat_id, user_id)):
-            del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('subs_menu', chat_id).split('\n')[0] + ": Subscription updated!")
-        else:
-            bot.reply_to(message, translate('subs_menu', chat_id).split('\n')[0] + ": Subscription not found!")
     except ValueError:
         bot.reply_to(message, translate('sub_invalid_duration', chat_id))
 
@@ -1923,9 +1709,9 @@ def fed_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[1], callback_data='fed_link'),
-        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_list'),
-        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[3], callback_data='fed_sync'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_link'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[3], callback_data='fed_list'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[4], callback_data='fed_sync'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -1938,51 +1724,28 @@ def fed_action(call):
     
     if action == 'link':
         bot.temp_data[chat_id] = {'action': 'fed_link', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='fed_menu'),
-            types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_list')
-        )
-        bot.edit_message_text("Send group ID to link:", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send group ID to link:"
     elif action == 'list':
-        groups = safe_db_operation("SELECT linked_group FROM federations WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('fed_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {g[0]}" for g in groups) or "No linked groups."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[1], callback_data='fed_link'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
+        feds = safe_db_operation("SELECT linked_group, sync_actions FROM federations WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('fed_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {gid}: {sa}" for gid, sa in feds) or "No linked groups."
     elif action == 'sync':
-        bot.temp_data[chat_id] = {'action': 'fed_sync', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='fed_menu'),
-            types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_list')
-        )
-        bot.edit_message_text("Send sync actions (e.g., bans,warns)", chat_id, call.message.message_id, reply_markup=markup)
+        text = "⚙️ Federation sync: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='fed_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_fed_link(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
-    linked_group = sanitize_input(message.text)
+    linked_group = message.text.strip()
     if safe_db_operation("INSERT INTO federations VALUES (?, ?, ?, 0)", 
-                       (chat_id, linked_group, '',)):
+                       (chat_id, linked_group, json.dumps(['ban', 'mute']))):
         del bot.temp_data[chat_id]
         bot.reply_to(message, translate('fed_linked', chat_id))
-    else:
-        bot.reply_to(message, translate('fed_error', chat_id))
-
-def handle_fed_sync(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    actions = sanitize_input(message.text)
-    if safe_db_operation("UPDATE federations SET sync_actions=? WHERE chat_id=?", 
-                       (actions, chat_id)):
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, translate('fed_menu', chat_id).split('\n')[0] + ": Sync actions updated!")
     else:
         bot.reply_to(message, translate('fed_error', chat_id))
 
@@ -1993,10 +1756,10 @@ def captcha_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[1], callback_data='captcha_type'),
-        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[2], callback_data='captcha_difficulty'),
-        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[3], callback_data='captcha_time'),
-        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[4], callback_data='captcha_action'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[2], callback_data='captcha_type'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[3], callback_data='captcha_difficulty'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[4], callback_data='captcha_time'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[5], callback_data='captcha_action'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -2008,14 +1771,8 @@ def captcha_action(call):
     chat_id = str(call.message.chat.id)
     
     bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': action, 'timeout': time.time() + 300}
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("⬅️ Cancel", callback_data='captcha_menu'),
-        types.InlineKeyboardButton(translate('group_menu', chat_id).split('\n')[0], callback_data='group_menu')
-    )
-    
     if action == 'type':
-        text = "Send captcha type (math/text/image):"
+        text = "Send CAPTCHA type (math/text/image):"
     elif action == 'difficulty':
         text = "Send difficulty (easy/medium/hard):"
     elif action == 'time':
@@ -2023,26 +1780,32 @@ def captcha_action(call):
     elif action == 'action':
         text = "Send fail action (kick/mute):"
     
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu')
+    )
     bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_captcha_set(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     sub_action = bot.temp_data[chat_id]['sub_action']
-    value = sanitize_input(message.text)
+    value = message.text.lower()
     
     if sub_action == 'type' and value not in ['math', 'text', 'image']:
         return bot.reply_to(message, translate('captcha_error', chat_id))
-    elif sub_action == 'difficulty' and value not in ['easy', 'medium', 'hard']:
+    if sub_action == 'difficulty' and value not in ['easy', 'medium', 'hard']:
         return bot.reply_to(message, translate('captcha_invalid_difficulty', chat_id))
-    elif sub_action == 'time' and not validate_time_format(value):
+    if sub_action == 'time' and not validate_time_format(value):
         return bot.reply_to(message, translate('captcha_invalid_time', chat_id))
-    elif sub_action == 'action' and value not in ['kick', 'mute']:
+    if sub_action == 'action' and value not in ['kick', 'mute']:
         return bot.reply_to(message, translate('captcha_invalid_action', chat_id))
     
-    column = {'type': 'type', 'difficulty': 'difficulty', 'time': 'time_limit', 'action': 'fail_action'}[sub_action]
-    if safe_db_operation(f"INSERT OR REPLACE INTO captchas (chat_id, {column}) VALUES (?, ?)", 
-                       (chat_id, value)):
+    if safe_db_operation("INSERT OR REPLACE INTO captchas VALUES (?, ?, ?, ?, ?)", 
+                       (chat_id, value if sub_action == 'type' else 'math', 
+                        value if sub_action == 'difficulty' else 'easy', 
+                        parse_time(value) if sub_action == 'time' else 300, 
+                        value if sub_action == 'action' else 'kick')):
         del bot.temp_data[chat_id]
         bot.reply_to(message, translate('captcha_saved', chat_id))
     else:
@@ -2055,9 +1818,9 @@ def dump_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[1], callback_data='dump_enable'),
-        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[2], callback_data='dump_channel'),
-        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_view'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[2], callback_data='dump_enable'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_channel'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[4], callback_data='dump_view'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -2070,59 +1833,49 @@ def dump_action(call):
     
     if action == 'enable':
         bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'enable', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='dump_menu'),
-            types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_view')
-        )
-        bot.edit_message_text("Send 'on' or 'off' to enable/disable message dump:", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send 'on' or 'off' to enable/disable message dump:"
     elif action == 'channel':
         bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'channel', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='dump_menu'),
-            types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_view')
-        )
-        bot.edit_message_text("Send channel ID for message dump:", chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send channel ID for message dump:"
     elif action == 'view':
-        dumps = safe_db_operation("SELECT deleted_msg, timestamp FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
-        text = translate('dump_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {t}: {m}" for m, t in dumps) or "No dumped messages."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[1], callback_data='dump_enable'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+        dumps = safe_db_operation("SELECT deleted_msg, user_id, timestamp FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('dump_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {t}: {m} ({u})" for m, u, t in dumps) or "No dumped messages."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu'),
+        types.InlineKeyboardButton("📝 View", callback_data='dump_view')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_dump_set(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     sub_action = bot.temp_data[chat_id]['sub_action']
-    value = sanitize_input(message.text)
+    value = message.text.lower()
+    
+    if sub_action == 'enable' and value not in ['on', 'off']:
+        return bot.reply_to(message, translate('invalid_input', chat_id))
+    if sub_action == 'channel':
+        try:
+            int(value)
+        except ValueError:
+            return bot.reply_to(message, translate('dump_invalid_channel', chat_id))
     
     if sub_action == 'enable':
-        if value not in ['on', 'off']:
-            return bot.reply_to(message, translate('invalid_input', chat_id))
         if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'message_dump', 'status', ?)", 
                            (chat_id, json.dumps({'status': value}))):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('dump_enabled', chat_id, status='enabled' if value == 'on' else 'disabled'))
         else:
             bot.reply_to(message, translate('dump_error', chat_id))
-    
     elif sub_action == 'channel':
-        try:
-            bot.get_chat(value)
-            if safe_db_operation("INSERT OR REPLACE INTO message_dump (chat_id, dump_channel) VALUES (?, ?)", 
-                               (chat_id, value)):
-                del bot.temp_data[chat_id]
-                bot.reply_to(message, translate('dump_channel_set', chat_id))
-            else:
-                bot.reply_to(message, translate('dump_error', chat_id))
-        except:
-            bot.reply_to(message, translate('dump_invalid_channel', chat_id))
+        if safe_db_operation("INSERT OR REPLACE INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, '', '', '', value)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('dump_channel_set', chat_id))
+        else:
+            bot.reply_to(message, translate('dump_error', chat_id))
 
 # PLUGINS MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'plugins_menu')
@@ -2131,9 +1884,9 @@ def plugins_menu(call):
     
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[1], callback_data='plugin_install'),
-        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_list'),
-        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[3], callback_data='plugin_config'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_install'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[3], callback_data='plugin_list'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[4], callback_data='plugin_config'),
         types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
     )
     
@@ -2146,43 +1899,27 @@ def plugin_action(call):
     
     if action == 'install':
         bot.temp_data[chat_id] = {'action': 'plugin_install', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='plugins_menu'),
-            types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_list')
-        )
-        bot.edit_message_text("Send plugin name and config (e.g., plugin_name|key:value)", 
-                             chat_id, call.message.message_id, reply_markup=markup)
-    
+        text = "Send plugin name and config (e.g., plugin_name|config):"
     elif action == 'list':
         plugins = safe_db_operation("SELECT plugin_name, config FROM plugins WHERE chat_id=?", (chat_id,), "fetch")
         text = translate('plugins_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {p}: {c}" for p, c in plugins) or "No plugins installed."
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[1], callback_data='plugin_install'),
-            types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu')
-        )
-        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
-    
     elif action == 'config':
-        bot.temp_data[chat_id] = {'action': 'plugin_config', 'timeout': time.time() + 300}
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("⬅️ Cancel", callback_data='plugins_menu'),
-            types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_list')
-        )
-        bot.edit_message_text("Send plugin name and new config (e.g., plugin_name|key:value)", 
-                             chat_id, call.message.message_id, reply_markup=markup)
+        text = "⚙️ Plugin config: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='plugin_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
 
 def handle_plugin_install(message):
     chat_id = str(message.chat.id)
     if chat_id not in bot.temp_data: return
     try:
-        name, config = message.text.split('|')
-        name = sanitize_input(name)
-        config = sanitize_input(config)
+        plugin_name, config = message.text.split('|')
         if safe_db_operation("INSERT INTO plugins VALUES (?, ?, ?, 1)", 
-                           (chat_id, name, config)):
+                           (chat_id, plugin_name, config)):
             del bot.temp_data[chat_id]
             bot.reply_to(message, translate('plugin_installed', chat_id))
         else:
@@ -2190,47 +1927,27 @@ def handle_plugin_install(message):
     except ValueError:
         bot.reply_to(message, translate('plugin_error', chat_id))
 
-def handle_plugin_config(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    try:
-        name, config = message.text.split('|')
-        name = sanitize_input(name)
-        config = sanitize_input(config)
-        if safe_db_operation("UPDATE plugins SET config=? WHERE chat_id=? AND plugin_name=?", 
-                           (config, chat_id, name)):
-            del bot.temp_data[chat_id]
-            bot.reply_to(message, translate('plugins_menu', chat_id).split('\n')[0] + ": Config updated!")
-        else:
-            bot.reply_to(message, translate('plugin_error', chat_id))
-    except ValueError:
-        bot.reply_to(message, translate('plugin_error', chat_id))
-
-# MODERATION LOCKS MENU
+# MODERATION LOCK MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'moderation_lock')
 def moderation_lock_menu(call):
     chat_id = str(call.message.chat.id)
     settings = get_all_settings(chat_id)
     
-    links_status = '✅' if safe_json(settings.get('moderation_lock_links', '{}'))['status'] == 'on' else '❌'
-    media_status = '✅' if safe_json(settings.get('moderation_lock_media', '{}'))['status'] == 'on' else '❌'
-    stickers_status = '✅' if safe_json(settings.get('moderation_lock_stickers', '{}'))['status'] == 'on' else '❌'
-    forwards_status = '✅' if safe_json(settings.get('moderation_lock_forwards', '{}'))['status'] == 'on' else '❌'
-    
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton(f"🔗 Links: {links_status}", callback_data='lock_links'),
-        types.InlineKeyboardButton(f"📸 Media: {media_status}", callback_data='lock_media'),
-        types.InlineKeyboardButton(f"😀 Stickers: {stickers_status}", callback_data='lock_stickers'),
-        types.InlineKeyboardButton(f"📤 Forwards: {forwards_status}", callback_data='lock_forwards'),
-        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
-    )
+    buttons = [
+        ("🔗 Links", 'lock_links', safe_json(settings.get('moderation_lock_links', '{}'))['status']),
+        ("📸 Media", 'lock_media', safe_json(settings.get('moderation_lock_media', '{}'))['status']),
+        ("😀 Stickers", 'lock_stickers', safe_json(settings.get('moderation_lock_stickers', '{}'))['status']),
+        ("📤 Forwards", 'lock_forwards', safe_json(settings.get('moderation_lock_forwards', '{}'))['status']),
+        ("⬅️ Back", 'group_menu', '')
+    ]
+    markup.add(*[types.InlineKeyboardButton(f"{text} {'✅' if status == 'on' else '❌'}", callback_data=data) for text, data, status in buttons])
     
     bot.edit_message_text(translate('moderation_lock_menu', chat_id, 
-                                   links_status=links_status, 
-                                   media_status=media_status, 
-                                   stickers_status=stickers_status, 
-                                   forwards_status=forwards_status), 
+                                    links_status=safe_json(settings.get('moderation_lock_links', '{}'))['status'],
+                                    media_status=safe_json(settings.get('moderation_lock_media', '{}'))['status'],
+                                    stickers_status=safe_json(settings.get('moderation_lock_stickers', '{}'))['status'],
+                                    forwards_status=safe_json(settings.get('moderation_lock_forwards', '{}'))['status']),
                          chat_id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('lock_'))
@@ -2238,29 +1955,39 @@ def lock_action(call):
     action = call.data.split('_')[1]
     chat_id = str(call.message.chat.id)
     
-    bot.temp_data[chat_id] = {'action': 'lock_set', 'sub_action': action, 'timeout': time.time() + 300}
+    bot.temp_data[chat_id] = {'action': f'lock_{action}', 'timeout': time.time() + 300}
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("⬅️ Cancel", callback_data='moderation_lock'),
-        types.InlineKeyboardButton(translate('group_menu', chat_id).split('\n')[0], callback_data='group_menu')
+        types.InlineKeyboardButton("✅ On", callback_data=f'lock_{action}_on'),
+        types.InlineKeyboardButton("❌ Off", callback_data=f'lock_{action}_off'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_lock')
     )
-    bot.edit_message_text(f"Send 'on' or 'off' to set {action} lock:", chat_id, call.message.message_id, reply_markup=markup)
+    bot.edit_message_text(f"Set {action} lock (on/off):", chat_id, call.message.message_id, reply_markup=markup)
 
-def handle_lock_set(message):
-    chat_id = str(message.chat.id)
-    if chat_id not in bot.temp_data: return
-    sub_action = bot.temp_data[chat_id]['sub_action']
-    value = message.text.lower()
-    
-    if value not in ['on', 'off']:
-        return bot.reply_to(message, translate('invalid_input', chat_id))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lock_') and call.data.endswith(('_on', '_off')))
+def lock_set(call):
+    parts = call.data.split('_')
+    action, status = parts[1], parts[2]
+    chat_id = str(call.message.chat.id)
     
     if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
-                       (chat_id, 'moderation', f'lock_{sub_action}', json.dumps({'status': value}))):
-        del bot.temp_data[chat_id]
-        bot.reply_to(message, translate('lock_set', chat_id, action=sub_action.capitalize(), status='enabled' if value == 'on' else 'disabled'))
+                       (chat_id, 'moderation', f'lock_{action}', json.dumps({'status': status}))):
+        bot.edit_message_text(translate('lock_set', chat_id, action=action.capitalize(), status=status), 
+                             chat_id, call.message.message_id)
     else:
-        bot.reply_to(message, translate('lock_error', chat_id, action=sub_action.capitalize()))
+        bot.edit_message_text(translate('lock_error', chat_id, action=action.capitalize()), 
+                             chat_id, call.message.message_id)
+
+# COMMANDS LIST
+@bot.callback_query_handler(func=lambda call: call.data == 'show_commands')
+def show_commands(call):
+    chat_id = str(call.message.chat.id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='help')
+    )
+    bot.edit_message_text(translate('commands_list', chat_id), chat_id, call.message.message_id, reply_markup=markup)
 
 # ADVANCED MENU
 @bot.callback_query_handler(func=lambda call: call.data == 'advanced_menu')
@@ -2279,40 +2006,70 @@ def advanced_menu(call):
         (translate('captcha_menu', chat_id).split('\n')[0], 'captcha_menu'),
         (translate('dump_menu', chat_id).split('\n')[0], 'dump_menu'),
         (translate('plugins_menu', chat_id).split('\n')[0], 'plugins_menu'),
-        ("⬅️ Back", 'main')
+        ("⬅️ Back", 'group_menu')
     ]
     markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
     
     bot.edit_message_text(translate('advanced_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
 
-# SHOW COMMANDS
-@bot.callback_query_handler(func=lambda call: call.data == 'show_commands')
-def show_commands(call):
-    chat_id = str(call.message.chat.id)
+# MODERATION COMMANDS
+@bot.message_handler(commands=['warn', 'unwarn', 'ban', 'unban', 'mute', 'unmute'])
+def moderation_commands(message):
+    chat_id = str(message.chat.id)
+    if not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, translate('admin_only', chat_id))
+    
+    cmd = message.text.split()[0][1:].lower()
+    try:
+        user_id = message.text.split()[1].strip('@')
+        reason = ' '.join(message.text.split()[2:]) or 'No reason'
+        if cmd == 'mute':
+            duration = parse_time(message.text.split()[2]) if len(message.text.split()) > 2 else 3600
+            reason = ' '.join(message.text.split()[3:]) or 'No reason'
+        
+        actions = {
+            'warn': lambda: safe_db_operation("INSERT INTO warns VALUES (?, ?, ?, ?, ?)", 
+                                            (chat_id, user_id, 1, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unwarn': lambda: safe_db_operation("DELETE FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id)),
+            'ban': lambda: bot.kick_chat_member(chat_id, user_id) and safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                                                                      (chat_id, 'ban', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unban': lambda: bot.unban_chat_member(chat_id, user_id) and safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                                                                        (chat_id, 'unban', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'mute': lambda: bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False}, until_date=int(time.time()) + duration) and 
+                    safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                     (chat_id, 'mute', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unmute': lambda: bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': True}) and 
+                      safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                       (chat_id, 'unmute', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        }
+        
+        if actions[cmd]():
+            bot.reply_to(message, f"✅ {cmd.capitalize()} applied to {user_id}: {reason}")
+        else:
+            bot.reply_to(message, f"❌ Error applying {cmd} to {user_id}")
+    except IndexError:
+        bot.reply_to(message, f"❌ Usage: /{cmd} @username [reason]")
+
+# SETTINGS COMMAND
+@bot.message_handler(commands=['settings'])
+def settings_command(message):
+    chat_id = str(message.chat.id)
+    if message.chat.type == 'private' or not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, translate('admin_only', chat_id))
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("⬅️ Back", callback_data='main'),
-        types.InlineKeyboardButton(translate('group_menu', chat_id).split('\n')[0], callback_data='group_menu')
+        types.InlineKeyboardButton(translate('main_menu', chat_id).split('\n')[0], callback_data='main'),
+        types.InlineKeyboardButton(translate('commands_list', chat_id).split('\n')[0], callback_data='show_commands')
     )
-    bot.edit_message_text(translate('commands_list', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+    bot.reply_to(message, translate('main_menu', chat_id), reply_markup=markup)
 
-# FLASK WEBHOOK
-@app.route('/webhook', methods=['POST'])
-def webhook():
+# MAIN LOOP
+if __name__ == "__main__":
+    logging.info("Starting bot with polling...")
     try:
-        update = telebot.types.Update.de_json(request.get_json())
-        bot.process_new_updates([update])
-        return '', 200
+        bot.polling(none_stop=True, interval=0)  # Choreo के लिए पोलिंग
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return '', 500
-
-# Vercel entry point
-if __name__ == '__main__':
-    try:
-        bot.remove_webhook()
-        webhook_url = os.getenv('WEBHOOK_URL', f'https://{os.getenv("VERCEL_URL")}/webhook')
-        bot.set_webhook(url=webhook_url)
-        app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
-    except Exception as e:
-        logging.error(f"Startup error: {e}")
+        logging.error(f"Polling error: {e}")
+        time.sleep(10)
+        bot.polling(none_stop=True, interval=0)
