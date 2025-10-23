@@ -1,20 +1,20 @@
-# Use the official Python slim image
-FROM python:3.9-slim
+# आधार के रूप में आधिकारिक Python इमेज
+FROM python:3.11-slim
 
-# Set working directory
+# वर्किंग डायरेक्टरी सेट करें
 WORKDIR /app
 
-# Copy requirements file
-COPY requirements.txt .
+# प्रोजेक्ट फाइल्स कॉपी करें
+COPY . .
 
-# Install dependencies
+# डिपेंडेंसीज़ इंस्टॉल करें
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the bot code
-COPY bot.py .
+# SQLite डेटाबेस के लिए डायरेक्टरी बनाएँ
+RUN mkdir -p /app/data
 
-# Expose the port for Flask webhook
-EXPOSE 5000
+# पर्यावरण चर सेट करें (Choreo द्वारा ओवरराइड किया जाएगा)
+ENV BOT_TOKEN=${BOT_TOKEN}
 
-# Command to run the bot
+# बॉट चलाएँ
 CMD ["python", "bot.py"]
