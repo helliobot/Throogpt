@@ -1,0 +1,17 @@
+version: 0.2
+components:
+  - name: telegram-bot
+    type: service
+    build:
+      git:
+        url: https://helliobot.github.io/Throogpt/
+        path: /
+    runtime: python
+    envVars:
+      - name: BOT_TOKEN
+    volumeMounts:
+      - name: data
+        mountPath: /app/data
+    resources:
+      memory: 512Mi
+      cpu: 500m
