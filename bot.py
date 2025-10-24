@@ -1635,28 +1635,35 @@ def captcha_expiry_worker():
 Thread(target=captcha_expiry_worker, daemon=True).start()
 
 # ---------- Housekeeping (prune notes xp cache etc) ----------
+# ---------- Housekeeping (prune notes, flood cache etc) ----------
 def bg_housekeep():
     while True:
         try:
             conn = db(); c = conn.cursor()
-            c.execute("DELETE FROM notes WHERE expires_at>0 AND expires_at<?", (now_ts(),))
+            # पुराने expire हुए notes हटाओ
+            c.execute("DELETE FROM notes WHERE expires_at > 0 AND expires_at < ?", (now_ts(),))
             conn.commit(); conn.close()
-            # prune flood cache
+
+            # flood cache साफ़ करो
             nowt = now_ts()
             for key, arr in list(user_messages.items()):
                 user_messages[key] = [t for t in arr if nowt - t <= 120]
+
         except Exception as e:
-            logging.warning(f"housekeep: {e}")
+            logging.warning(f"housekeep error: {e}")
+
+        # हर 60 सेकंड बाद दोबारा चेक करेगा
         time.sleep(60)
 
+# Background housekeeping thread चालू करो
 Thread(target=bg_housekeep, daemon=True).start()
 
 # ---------- Run ----------
-if __name__ == '__main__':
-    logging.info("Bot starting...")
-    while True:
-        try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception as e:
-            logging.error(f"polling error: {e}")
-            time.sleep(3)
+if __name__ == "__main__":
+    logging.info("Starting bot with polling...")
+    try:
+        bot.polling(none_stop=True, interval=0)  # Choreo के लिए पोलिंग
+    except Exception as e:
+        logging.error(f"Polling error: {e}")
+        time.sleep(10)
+        bot.polling(none_stop=True, interval=0)
