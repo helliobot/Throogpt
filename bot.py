@@ -222,7 +222,7 @@ def send_menu(chat_id, text, markup=None, cache_key=None, invalidate_keys=None):
 # ---------- Languages (minimal sample; extend as needed) ----------
 LANG = {
     'en': {
-        'main': "🔧 MAIN MENU
+        'main': """🔧 MAIN MENU
 
 🛡️ Verify
 👋 Welcome
@@ -232,7 +232,7 @@ LANG = {
 🚫 Block
 🌐 Lang
 ⚙️ Advanced
-👥 Group",
+👥 Group""",
         'back': "⬅️ Back",
         'group': "👥 GROUP MANAGEMENT",
         'ok': "✅ Done",
@@ -242,7 +242,7 @@ LANG = {
         'stats_title': "📈 Analytics (7d/30d):",
     },
     'hi': {
-        'main': "🔧 मुख्य मेनू
+        'main': """🔧 मुख्य मेनू
 
 🛡️ वेरिफ़ाई
 👋 स्वागत
@@ -252,7 +252,7 @@ LANG = {
 🚫 ब्लॉक
 🌐 भाषा
 ⚙️ एडवांस्ड
-👥 ग्रुप",
+👥 ग्रुप""",
         'back': "⬅️ पीछे",
         'group': "👥 ग्रुप प्रबंधन",
         'ok': "✅ हो गया",
