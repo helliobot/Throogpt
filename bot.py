@@ -334,8 +334,7 @@ def stats_report(chat_id, days=7):
               (str(chat_id), since))
     rows = c.fetchall(); conn.close()
     lines = [f"{r['action']}: {r['c']}" for r in rows] or ["(no data)"]
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 # ---------- Welcome Template ----------
 def welcome_tpl_get(chat_id):
