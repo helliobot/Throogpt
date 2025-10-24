@@ -1,878 +1,2087 @@
-# -*- coding: utf-8 -*-
-# Advanced Telegram Group Manager Bot (single-file, Choreo-safe, no extra libs/APIs)
-
-import os, sqlite3, json, time, re, random, logging, html
-from datetime import datetime, timedelta
-from threading import Lock, Thread
-from collections import defaultdict
-from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
-
+import sqlite3  # Turso की जगह SQLite3
 import telebot
+import os
+import json
+import time
+import random
+import re
 from telebot import types
 from dotenv import load_dotenv
+from collections import defaultdict
+import logging
+from datetime import datetime, timedelta
+from threading import Lock, Thread
+import html
 
-# ---------- Logging ----------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+# Logging setup (Choreo के लिए stdout पर)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s: %(message)s'
+)
 
-# ---------- Env & Bot ----------
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
 if not TOKEN:
     logging.error("❌ BOT_TOKEN not found! Check your Choreo Environment Variables.")
-    raise SystemExit(1)
+    exit()
+bot = telebot.TeleBot(TOKEN)
 
-bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
-
-# ---------- Globals ----------
-DB_PATH = os.getenv('DB_PATH', 'bot.db')
-MENU_CACHE = {}
+# Global locks and caches
 flood_locks = defaultdict(Lock)
-user_messages = defaultdict(list)  # for flood control cache
-bot.temp_data = {}  # transient state map
+user_messages = defaultdict(list)
+MENU_CACHE = {}
+bot.temp_data = {}  # For state management
 
-# ---------- Safe utilities ----------
-def now_ts():
-    return int(time.time())
-
-def jdump(obj):
-    return json.dumps(obj, ensure_ascii=False)
-
-def jload(s, default=None):
-    try:
-        return json.loads(s) if s else default
-    except Exception:
-        return default
-
-def safe_int(x, d=0):
-    try:
-        return int(x)
-    except Exception:
-        return d
-
-def safe_html(text):
-    return html.escape(text or "")
-
-def clamp(v, lo, hi):
-    return max(lo, min(hi, v))
-
-# ---------- DB ----------
-def db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    conn = db()
-    cur = conn.cursor()
-
-    # settings
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
-        chat_id TEXT PRIMARY KEY,
-        lang TEXT DEFAULT 'en',
-        welcome_enabled INTEGER DEFAULT 1,
-        leave_enabled INTEGER DEFAULT 1,
-        flood_window INTEGER DEFAULT 15,
-        flood_limit INTEGER DEFAULT 7,
-        blacklist_enabled INTEGER DEFAULT 1,
-        locks_json TEXT DEFAULT '{}',
-        roles_json TEXT DEFAULT '{}',
-        captcha_mode TEXT DEFAULT 'math',
-        rss_json TEXT DEFAULT '[]',
-        plugins_json TEXT DEFAULT '[]',
-        subscriptions_json TEXT DEFAULT '[]'
-    )
-    """)
-
-    # triggers
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS triggers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        pattern TEXT,
-        reply TEXT,
-        is_regex INTEGER DEFAULT 0
-    )
-    """)
-
-    # notes
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        key TEXT,
-        content TEXT,
-        created_at INTEGER,
-        expires_at INTEGER
-    )
-    """)
-
-    # custom commands
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS commands (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        cmd TEXT,
-        body TEXT,
-        roles TEXT DEFAULT 'all'
-    )
-    """)
-
-    # analytics
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS analytics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        user_id TEXT,
-        action TEXT,
-        at INTEGER
-    )
-    """)
-
-    # blacklist words
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS blacklist (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        word TEXT
-    )
-    """)
-
-    # punishments
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS punishments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        user_id TEXT,
-        type TEXT,
-        until_ts INTEGER
-    )
-    """)
-
-    # dumps toggles
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS dumps (
-        chat_id TEXT PRIMARY KEY,
-        enabled INTEGER DEFAULT 0,
-        forward_to TEXT
-    )
-    """)
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ---------- Settings helpers ----------
-def ensure_settings(chat_id):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id FROM settings WHERE chat_id=?", (chat_id,))
-    if not cur.fetchone():
-        cur.execute("INSERT INTO settings(chat_id) VALUES(?)", (chat_id,))
-        conn.commit()
-    conn.close()
-
-def get_settings(chat_id):
-    ensure_settings(chat_id)
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM settings WHERE chat_id=?", (chat_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row
-
-def set_setting(chat_id, key, value):
-    ensure_settings(chat_id)
-    conn = db()
-    cur = conn.cursor()
-    cur.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (value, chat_id))
-    conn.commit()
-    conn.close()
-
-# ---------- Message cache & deletion policy ----------
-last_reply_id = {}
-def remember_reply(chat_id, message_id):
-    last_reply_id[str(chat_id)] = message_id
-
-def delete_previous_reply(chat_id):
-    # FIX: never delete before sending response; call only after new message is sent
-    pass  # no-op here; managed in send_menu
-
-# ---------- Core send with cleanup ----------
-def send_menu(chat_id, text, markup=None, cache_key=None, invalidate_keys=None):
-    # invalidate caches
-    if invalidate_keys:
-        for k in invalidate_keys:
-            MENU_CACHE.pop((chat_id, k), None)
-
-    # send new message
-    m = bot.send_message(chat_id, text, reply_markup=markup)
-    # clean previous reply safely
-    prev = last_reply_id.get(str(chat_id))
-    if prev and prev != m.message_id:
-        try:
-            bot.delete_message(chat_id, prev)
-        except Exception:
-            pass
-    remember_reply(chat_id, m.message_id)
-    return m
-
-# ---------- Languages (minimal sample; extend as needed) ----------
-LANG = {
+# Language translations
+translations = {
     'en': {
-        'main': """🔧 MAIN MENU
-
-🛡️ Verify
-👋 Welcome
-📬 Triggers
-⏰ Schedule
-🧹 Clean
-🚫 Block
-🌐 Lang
-⚙️ Advanced
-👥 Group""",
-        'back': "⬅️ Back",
-        'group': "👥 GROUP MANAGEMENT",
-        'ok': "✅ Done",
-        'cancel': "✖️ Cancel",
-        'welcome_on': "Welcome enabled.",
-        'welcome_off': "Welcome disabled.",
-        'stats_title': "📈 Analytics (7d/30d):",
+        'main_menu': "🔧 MAIN MENU\n\n"
+                     "🛡️ Verify: User verification settings\n"
+                     "👋 Welcome: Greetings for new members\n"
+                     "📬 Triggers: Auto-responses to keywords\n"
+                     "⏰ Schedule: Timed messages\n"
+                     "🔒 Moderation: Locks and penalties\n"
+                     "🧹 Clean: Auto-delete rules\n"
+                     "🚫 Block: Block lists\n"
+                     "🌐 Lang: Language settings\n"
+                     "⚙️ Advanced: Extra tools",
+        'group_menu': "🏛️ GROUP MANAGEMENT\n\n"
+                      "🔒 Locks: Restrict content types\n"
+                      "🛡️ CAPTCHA: Verify new users\n"
+                      "📊 Analytics: Group stats\n"
+                      "🎯 Triggers: Keyword responses\n"
+                      "👋 Welcome: Join/leave messages\n"
+                      "🛡️ Flood: Anti-spam limits\n"
+                      "📢 Broadcast: Mass messages\n"
+                      "🚫 Blacklists: Word filters\n"
+                      "👑 Permissions: User roles\n"
+                      "⚙️ Commands: Custom cmds\n"
+                      "📊 Polls: Advanced voting\n"
+                      "📝 Notes: Tagged notes\n"
+                      "📰 RSS: Feed updates\n"
+                      "💰 Subs: User plans\n"
+                      "🔗 Federation: Linked groups\n"
+                      "🎲 Captcha: Verification types\n"
+                      "💾 Dump: Deleted msg logs\n"
+                      "🔌 Plugins: Extra modules",
+        'analytics_menu': "📊 ANALYTICS MENU\n\n{stats}\n\n"
+                          "📈 Weekly: Last 7 days stats\n"
+                          "📉 Monthly: Last 30 days stats\n"
+                          "📤 Report: Export data",
+        'triggers_menu': "🎯 TRIGGERS MENU\n\n"
+                         "➕ Add: Create new trigger\n"
+                         "📝 List: View all triggers\n"
+                         "✏️ Edit: Modify existing\n"
+                         "🗑️ Delete: Remove trigger",
+        'welcome_menu': "👋 WELCOME MESSAGES\n\n"
+                        "👋 Set Welcome: Greeting for joins\n"
+                        "👋 Preview: See current\n"
+                        "🚪 Set Leave: Farewell for leaves",
+        'flood_menu': "🛡️ ANTI-FLOOD MENU\n\n"
+                      "🛡️ Enable: Turn on/off\n"
+                      "⚙️ Set Limit: Msgs per min\n"
+                      "📊 Stats: Flood incidents",
+        'broadcast_menu': "📢 BROADCAST MENU\n\n"
+                          "📢 Send Now: Immediate msg\n"
+                          "👥 Select Groups: Target groups\n"
+                          "📋 Preview: See msg",
+        'blacklist_menu': "🚫 BLACKLISTS MENU\n\n"
+                          "➕ Add Word: Simple word filter\n"
+                          "⚡ Add Regex: Pattern filter\n"
+                          "📝 List: View filters\n"
+                          "🗑️ Remove: Delete filter",
+        'advanced_menu': "⚙️ ADVANCED TOOLS\n\n"
+                         "👑 Permissions: Role management\n"
+                         "⚙️ Custom Cmds: User-defined commands\n"
+                         "📊 Polls: Voting systems\n"
+                         "📝 Notes: Tagged reminders\n"
+                         "📰 RSS: Feed subscriptions\n"
+                         "💰 Subscriptions: User plans\n"
+                         "🔗 Federation: Group linking\n"
+                         "🎲 Captcha Types: Verification options\n"
+                         "💾 Message Dump: Deleted logs\n"
+                         "🔌 Plugins: Extra features",
+        'permissions_menu': "👑 PERMISSIONS MENU\n\n"
+                            "👑 Grant Role: Assign mod/admin\n"
+                            "📋 List Roles: View assigned\n"
+                            "⚙️ Set Commands: Role permissions\n"
+                            "⏰ Set Duration: Time-limited roles",
+        'customcmd_menu': "⚙️ CUSTOM COMMANDS MENU\n\n"
+                          "➕ Create: New command\n"
+                          "📝 List: View commands\n"
+                          "✏️ Edit: Modify command",
+        'polls_menu': "📊 POLLS MENU\n\n"
+                      "📊 New Poll: Create poll\n"
+                      "⚙️ Settings: Poll options\n"
+                      "📋 Active: View polls",
+        'notes_menu': "📝 NOTES MENU\n\n"
+                      "➕ Save Note: Add tagged note\n"
+                      "🔍 Search: Find notes\n"
+                      "📤 Share: Send note",
+        'rss_menu': "📰 RSS MENU\n\n"
+                    "➕ Add Feed: New URL\n"
+                    "📝 List: View feeds\n"
+                    "✏️ Edit: Modify feed",
+        'subs_menu': "💰 SUBSCRIPTIONS MENU\n\n"
+                     "➕ Grant Plan: Assign to user\n"
+                     "📝 List: View subs\n"
+                     "✏️ Edit: Modify plan",
+        'fed_menu': "🔗 FEDERATION MENU\n\n"
+                    "🔗 Link Group: Connect groups\n"
+                    "📝 List: View links\n"
+                    "⚙️ Sync: Action sync settings",
+        'captcha_menu': "🎲 CAPTCHA MENU\n\n"
+                        "⚙️ Set Type: Math/text/image\n"
+                        "📊 Difficulty: Easy/hard\n"
+                        "⏰ Time Limit: Fail timeout\n"
+                        "🛑 Fail Action: Kick/mute",
+        'dump_menu': "💾 MESSAGE DUMP MENU\n\n"
+                     "🛑 Enable: Turn on/off\n"
+                     "📤 Channel: Set dump channel\n"
+                     "📝 View: See dumped messages",
+        'plugins_menu': "🔌 PLUGINS MENU\n\n"
+                        "➕ Install: Add new plugin\n"
+                        "📝 List: View plugins\n"
+                        "⚙️ Config: Plugin settings",
+        'moderation_lock_menu': "🔒 MODERATION LOCKS\n\n"
+                                "🔗 Links: {links_status}\n"
+                                "📸 Media: {media_status}\n"
+                                "😀 Stickers: {stickers_status}\n"
+                                "📤 Forwards: {forwards_status}",
+        'lang_menu': "🌐 LANGUAGE MENU\n\n"
+                     "🇬🇧 English: Set to English\n"
+                     "🇮🇳 Hindi: Set to Hindi",
+        'commands_list': "📋 AVAILABLE COMMANDS\n\n"
+                         "/start - Start bot\n"
+                         "/status - Group settings\n"
+                         "/warn @user reason - Warn user\n"
+                         "/unwarn @user - Remove warn\n"
+                         "/ban @user reason - Ban user\n"
+                         "/unban @user - Unban user\n"
+                         "/mute @user time reason - Mute user\n"
+                         "/unmute @user - Unmute user\n"
+                         "/settings - Open settings\n"
+                         "/lang - Change language",
+        'start_private': "{user}, Ultimate Advanced Bot!",
+        'start_group': "🤖 Advanced Group Bot Active!",
+        'admin_only': "Group creator or admin only!",
+        'welcome_default': "Welcome!",
+        'leave_default': "Goodbye!",
+        'trigger_added': "✅ Trigger added!",
+        'trigger_exists': "❌ Trigger already exists!",
+        'trigger_updated': "✅ Trigger '{keyword}' updated!",
+        'trigger_deleted': "✅ Trigger deleted!",
+        'trigger_not_found': "❌ Trigger not found!",
+        'trigger_too_long': "❌ Keyword or response too long!",
+        'invalid_regex': "❌ Invalid regex pattern!",
+        'welcome_set': "✅ Message set!",
+        'welcome_empty': "❌ Message cannot be empty!",
+        'flood_enabled': "✅ Flood {status}!",
+        'flood_limit_set': "✅ Limit set to {limit}!",
+        'flood_invalid_limit': "❌ Limit must be between 1 and 50!",
+        'flood_invalid_number': "❌ Invalid number!",
+        'flood_violation': "🛑 Slow down! Message deleted.",
+        'flood_mute': "🛑 You are muted for flooding!",
+        'flood_ban': "🛑 You are banned for flooding!",
+        'blacklist_added': "✅ Blacklist added!",
+        'blacklist_exists': "❌ Word already blacklisted!",
+        'blacklist_blocked': "🚫 Blocked!",
+        'blacklist_too_long': "❌ Word too long!",
+        'captcha_expired': "❌ Captcha expired!",
+        'captcha_timeout': "❌ Captcha timed out!",
+        'captcha_verified': "✅ Verified!",
+        'captcha_wrong': "❌ Wrong answer!",
+        'role_granted': "✅ {role} granted to {user_name} (ID: {user_id})!",
+        'role_error': "❌ Error granting role!",
+        'command_added': "✅ Custom command added!",
+        'command_exists': "❌ Command already exists!",
+        'command_updated': "✅ Command /{trigger} updated!",
+        'command_too_long': "❌ Trigger or response too long!",
+        'poll_created': "✅ Poll {poll_id} created!",
+        'poll_invalid': "❌ Invalid anonymous or timer value!",
+        'note_saved': "✅ Note saved!",
+        'note_invalid_expire': "❌ Invalid expire format (e.g., 1d)!",
+        'rss_added': "✅ RSS added!",
+        'rss_invalid_url': "❌ Invalid URL!",
+        'rss_invalid_interval': "❌ Invalid interval format (e.g., 1h)!",
+        'sub_granted': "✅ Subscription granted!",
+        'sub_invalid_duration': "❌ Invalid duration format (e.g., 1m)!",
+        'fed_linked': "✅ Group linked!",
+        'fed_error': "❌ Error linking group!",
+        'captcha_saved': "✅ CAPTCHA settings saved!",
+        'captcha_error': "❌ Error saving CAPTCHA settings!",
+        'captcha_invalid_difficulty': "❌ Invalid difficulty! Use easy/medium/hard.",
+        'captcha_invalid_time': "❌ Invalid time format (e.g., 5m)!",
+        'captcha_invalid_action': "❌ Invalid action! Use kick/mute.",
+        'dump_enabled': "✅ Message dump {status}!",
+        'dump_channel_set': "✅ Dump channel set!",
+        'dump_invalid_channel': "❌ Invalid channel ID!",
+        'dump_error': "❌ Error updating dump settings!",
+        'plugin_installed': "✅ Plugin installed!",
+        'plugin_error': "❌ Error installing plugin!",
+        'lock_set': "✅ {action} lock {status}!",
+        'lock_error': "❌ Error setting {action} lock!",
+        'invalid_input': "❌ Invalid input! Use 'on' or 'off'.",
+        'lang_set': "✅ Language set to {lang}!",
+        'lang_error': "❌ Invalid language! Use 'english' or 'hindi'.",
     },
     'hi': {
-        'main': """🔧 मुख्य मेनू
-
-🛡️ वेरिफ़ाई
-👋 स्वागत
-📬 ट्रिगर्स
-⏰ शेड्यूल
-🧹 क्लीन
-🚫 ब्लॉक
-🌐 भाषा
-⚙️ एडवांस्ड
-👥 ग्रुप""",
-        'back': "⬅️ पीछे",
-        'group': "👥 ग्रुप प्रबंधन",
-        'ok': "✅ हो गया",
-        'cancel': "✖️ रद्द",
-        'welcome_on': "स्वागत संदेश चालू।",
-        'welcome_off': "स्वागत संदेश बंद।",
-        'stats_title': "📈 एनालिटिक्स (7दिन/30दिन):",
+        'main_menu': "🔧 मुख्य मेन्यू\n\n"
+                     "🛡️ सत्यापन: उपयोगकर्ता सत्यापन सेटिंग्स\n"
+                     "👋 स्वागत: नए सदस्यों के लिए अभिवादन\n"
+                     "📬 ट्रिगर्स: कीवर्ड्स के लिए ऑटो-रिस्पॉन्स\n"
+                     "⏰ शेड्यूल: समयबद्ध संदेश\n"
+                     "🔒 मॉडरेशन: लॉक और दंड\n"
+                     "🧹 सफाई: ऑटो-डिलीट नियम\n"
+                     "🚫 ब्लॉक: ब्लॉक लिस्ट\n"
+                     "🌐 भाषा: भाषा सेटिंग्स\n"
+                     "⚙️ उन्नत: अतिरिक्त उपकरण",
+        'group_menu': "🏛️ समूह प्रबंधन\n\n"
+                      "🔒 लॉक: सामग्री प्रकार प्रतिबंधित करें\n"
+                      "🛡️ कैप्चा: नए उपयोगकर्ताओं का सत्यापन\n"
+                      "📊 एनालिटिक्स: समूह आँकड़े\n"
+                      "🎯 ट्रिगर्स: कीवर्ड रिस्पॉन्स\n"
+                      "👋 स्वागत: शामिल/छोड़ने के संदेश\n"
+                      "🛡️ फ्लड: एंटी-स्पैम सीमाएँ\n"
+                      "📢 प्रसारण: सामूहिक संदेश\n"
+                      "🚫 ब्लैकलिस्ट: शब्द फिल्टर\n"
+                      "👑 अनुमतियाँ: उपयोगकर्ता भूमिकाएँ\n"
+                      "⚙️ कमांड्स: कस्टम कमांड्स\n"
+                      "📊 पोल्स: उन्नत मतदान\n"
+                      "📝 नोट्स: टैग किए गए नोट्स\n"
+                      "📰 RSS: फ़ीड अपडेट्स\n"
+                      "💰 सदस्यताएँ: उपयोगकर्ता योजनाएँ\n"
+                      "🔗 फेडरेशन: लिंक्ड समूह\n"
+                      "🎲 कैप्चा: सत्यापन प्रकार\n"
+                      "💾 डंप: हटाए गए संदेश लॉग\n"
+                      "🔌 प्लगइन्स: अतिरिक्त मॉड्यूल",
+        'analytics_menu': "📊 एनालिटिक्स मेन्यू\n\n{stats}\n\n"
+                          "📈 साप्ताहिक: पिछले 7 दिन के आँकड़े\n"
+                          "📉 मासिक: पिछले 30 दिन के आँकड़े\n"
+                          "📤 रिपोर्ट: डेटा निर्यात करें",
+        'triggers_menu': "🎯 ट्रिगर्स मेन्यू\n\n"
+                         "➕ जोड़ें: नया ट्रिगर बनाएँ\n"
+                         "📝 सूची: सभी ट्रिगर्स देखें\n"
+                         "✏️ संपादन: मौजूदा में बदलाव\n"
+                         "🗑️ हटाएँ: ट्रिगर हटाएँ",
+        'welcome_menu': "👋 स्वागत संदेश\n\n"
+                        "👋 स्वागत सेट करें: शामिल होने के लिए अभिवादन\n"
+                        "👋 पूर्वावलोकन: वर्तमान देखें\n"
+                        "🚪 छोड़ने का संदेश: अलविदा संदेश",
+        'flood_menu': "🛡️ एंटी-फ्लड मेन्यू\n\n"
+                      "🛡️ सक्षम करें: चालू/बंद करें\n"
+                      "⚙️ सीमा सेट करें: प्रति मिनट संदेश\n"
+                      "📊 आँकड़े: फ्लड घटनाएँ",
+        'broadcast_menu': "📢 प्रसारण मेन्यू\n\n"
+                          "📢 अभी भेजें: तत्काल संदेश\n"
+                          "👥 समूह चुनें: लक्षित समूह\n"
+                          "📋 पूर्वावलोकन: संदेश देखें",
+        'blacklist_menu': "🚫 ब्लैकलिस्ट मेन्यू\n\n"
+                          "➕ शब्द जोड़ें: साधारण शब्द फिल्टर\n"
+                          "⚡ रेगेक्स जोड़ें: पैटर्न फिल्टर\n"
+                          "📝 सूची: फिल्टर देखें\n"
+                          "🗑️ हटाएँ: फिल्टर हटाएँ",
+        'advanced_menu': "⚙️ उन्नत उपकरण\n\n"
+                         "👑 अनुमतियाँ: भूमिका प्रबंधन\n"
+                         "⚙️ कस्टम कमांड्स: उपयोगकर्ता-परिभाषित कमांड्स\n"
+                         "📊 पोल्स: मतदान सिस्टम\n"
+                         "📝 नोट्स: टैग किए गए रिमाइंडर\n"
+                         "📰 RSS: फ़ीड सदस्यताएँ\n"
+                         "💰 सदस्यताएँ: उपयोगकर्ता योजनाएँ\n"
+                         "🔗 फेडरेशन: समूह लिंकिंग\n"
+                         "🎲 कैप्चा प्रकार: सत्यापन विकल्प\n"
+                         "💾 संदेश डंप: हटाए गए लॉग\n"
+                         "🔌 प्लगइन्स: अतिरिक्त सुविधाएँ",
+        'permissions_menu': "👑 अनुमतियाँ मेन्यू\n\n"
+                            "👑 भूमिका प्रदान करें: मॉड/एडमिन असाइन करें\n"
+                            "📋 भूमिकाएँ सूची: असाइन की गई देखें\n"
+                            "⚙️ कमांड्स सेट करें: भूमिका अनुमतियाँ\n"
+                            "⏰ अवधि सेट करें: समय-सीमित भूमिकाएँ",
+        'customcmd_menu': "⚙️ कस्टम कमांड्स मेन्यू\n\n"
+                          "➕ बनाएँ: नया कमांड\n"
+                          "📝 सूची: कमांड्स देखें\n"
+                          "✏️ संपादन: कमांड में बदलाव",
+        'polls_menu': "📊 पोल्स मेन्यू\n\n"
+                      "📊 नया पोल: पोल बनाएँ\n"
+                      "⚙️ सेटिंग्स: पोल विकल्प\n"
+                      "📋 सक्रिय: पोल्स देखें",
+        'notes_menu': "📝 नोट्स मेन्यू\n\n"
+                      "➕ नोट सहेजें: टैग किया नोट जोड़ें\n"
+                      "🔍 खोजें: नोट्स खोजें\n"
+                      "📤 साझा करें: नोट भेजें",
+        'rss_menu': "📰 RSS मेन्यू\n\n"
+                    "➕ फ़ीड जोड़ें: नया URL\n"
+                    "📝 सूची: फ़ीड्स देखें\n"
+                    "✏️ संपादन: फ़ीड में बदलाव",
+        'subs_menu': "💰 सदस्यताएँ मेन्यू\n\n"
+                     "➕ योजना प्रदान करें: उपयोगकर्ता को असाइन करें\n"
+                     "📝 सूची: सदस्यताएँ देखें\n"
+                     "✏️ संपादन: योजना में बदलाव",
+        'fed_menu': "🔗 फेडरेशन मेन्यू\n\n"
+                    "🔗 समूह लिंक करें: समूहों को जोड़ें\n"
+                    "📝 सूची: लिंक देखें\n"
+                    "⚙️ सिंक: एक्शन सिंक सेटिंग्स",
+        'captcha_menu': "🎲 कैप्चा मेन्यू\n\n"
+                        "⚙️ प्रकार सेट करें: गणित/टेक्स्ट/इमेज\n"
+                        "📊 कठिनाई: आसान/कठिन\n"
+                        "⏰ समय सीमा: असफल होने की समय-सीमा\n"
+                        "🛑 असफल एक्शन: किक/म्यूट",
+        'dump_menu': "💾 संदेश डंप मेन्यू\n\n"
+                     "🛑 सक्षम करें: चालू/बंद करें\n"
+                     "📤 चैनल: डंप चैनल सेट करें\n"
+                     "📝 देखें: हटाए गए संदेश देखें",
+        'plugins_menu': "🔌 प्लगइन्स मेन्यू\n\n"
+                        "➕ इंस्टॉल करें: नया प्लगइन जोड़ें\n"
+                        "📝 सूची: प्लगइन्स देखें\n"
+                        "⚙️ कॉन्फ़िग: प्लगइन सेटिंग्स",
+        'moderation_lock_menu': "🔒 मॉडरेशन लॉक\n\n"
+                                "🔗 लिंक: {links_status}\n"
+                                "📸 मीडिया: {media_status}\n"
+                                "😀 स्टिकर्स: {stickers_status}\n"
+                                "📤 फ़ॉरवर्ड: {forwards_status}",
+        'lang_menu': "🌐 भाषा मेन्यू\n\n"
+                     "🇬🇧 अंग्रेजी: अंग्रेजी में सेट करें\n"
+                     "🇮🇳 हिंदी: हिंदी में सेट करें",
+        'commands_list': "📋 उपलब्ध कमांड्स\n\n"
+                         "/start - बॉट शुरू करें\n"
+                         "/status - समूह सेटिंग्स\n"
+                         "/warn @user कारण - उपयोगकर्ता को चेतावनी दें\n"
+                         "/unwarn @user - चेतावनी हटाएँ\n"
+                         "/ban @user कारण - उपयोगकर्ता को प्रतिबंधित करें\n"
+                         "/unban @user - प्रतिबंध हटाएँ\n"
+                         "/mute @user समय कारण - उपयोगकर्ता को म्यूट करें\n"
+                         "/unmute @user - म्यूट हटाएँ\n"
+                         "/settings - सेटिंग्स खोलें\n"
+                         "/lang - भाषा बदलें",
+        'start_private': "{user}, अल्टिमेट एडवांस्ड बॉट!",
+        'start_group': "🤖 उन्नत समूह बॉट सक्रिय!",
+        'admin_only': "केवल समूह निर्माता या एडमिन!",
+        'welcome_default': "स्वागत है!",
+        'leave_default': "अलविदा!",
+        'trigger_added': "✅ ट्रिगर जोड़ा गया!",
+        'trigger_exists': "❌ ट्रिगर पहले से मौजूद है!",
+        'trigger_updated': "✅ ट्रिगर '{keyword}' अपडेट किया गया!",
+        'trigger_deleted': "✅ ट्रिगर हटाया गया!",
+        'trigger_not_found': "❌ ट्रिगर नहीं मिला!",
+        'trigger_too_long': "❌ कीवर्ड या रिस्पॉन्स बहुत लंबा है!",
+        'invalid_regex': "❌ अमान्य रेगेक्स पैटर्न!",
+        'welcome_set': "✅ संदेश सेट किया गया!",
+        'welcome_empty': "❌ संदेश खाली नहीं हो सकता!",
+        'flood_enabled': "✅ फ्लड {status}!",
+        'flood_limit_set': "✅ सीमा {limit} पर सेट की गई!",
+        'flood_invalid_limit': "❌ सीमा 1 और 50 के बीच होनी चाहिए!",
+        'flood_invalid_number': "❌ अमान्य संख्या!",
+        'flood_violation': "🛑 धीमे करें! संदेश हटाया गया।",
+        'flood_mute': "🛑 फ्लडिंग के लिए आपको म्यूट किया गया!",
+        'flood_ban': "🛑 फ्लडिंग के लिए आपको प्रतिबंधित किया गया!",
+        'blacklist_added': "✅ ब्लैकलिस्ट जोड़ा गया!",
+        'blacklist_exists': "❌ शब्द पहले से ब्लैकलिस्ट में है!",
+        'blacklist_blocked': "🚫 अवरुद्ध!",
+        'blacklist_too_long': "❌ शब्द बहुत लंबा है!",
+        'captcha_expired': "❌ कैप्चा समाप्त हो गया!",
+        'captcha_timeout': "❌ कैप्चा समय समाप्त!",
+        'captcha_verified': "✅ सत्यापित!",
+        'captcha_wrong': "❌ गलत जवाब!",
+        'role_granted': "✅ {role} {user_name} (ID: {user_id}) को प्रदान किया गया!",
+        'role_error': "❌ भूमिका प्रदान करने में त्रुटि!",
+        'command_added': "✅ कस्टम कमांड जोड़ा गया!",
+        'command_exists': "❌ कमांड पहले से मौजूद है!",
+        'command_updated': "✅ कमांड /{trigger} अपडेट किया गया!",
+        'command_too_long': "❌ ट्रिगर या रिस्पॉन्स बहुत लंबा है!",
+        'poll_created': "✅ पोल {poll_id} बनाया गया!",
+        'poll_invalid': "❌ अमान्य अनाम या टाइमर मान!",
+        'note_saved': "✅ नोट सहेजा गया!",
+        'note_invalid_expire': "❌ अमान्य समाप्ति प्रारूप (उदा., 1d)!",
+        'rss_added': "✅ RSS जोड़ा गया!",
+        'rss_invalid_url': "❌ अमान्य URL!",
+        'rss_invalid_interval': "❌ अमान्य अंतराल प्रारूप (उदा., 1h)!",
+        'sub_granted': "✅ सदस्यता प्रदान की गई!",
+        'sub_invalid_duration': "❌ अमान्य अवधि प्रारूप (उदा., 1m)!",
+        'fed_linked': "✅ समूह लिंक किया गया!",
+        'fed_error': "❌ समूह लिंक करने में त्रुटि!",
+        'captcha_saved': "✅ कैप्चा सेटिंग्स सहेजी गईं!",
+        'captcha_error': "❌ कैप्चा सेटिंग्स सहेजने में त्रुटि!",
+        'captcha_invalid_difficulty': "❌ अमान्य कठिनाई! आसान/मध्यम/कठिन का उपयोग करें।",
+        'captcha_invalid_time': "❌ अमान्य समय प्रारूप (उदा., 5m)!",
+        'captcha_invalid_action': "❌ अमान्य एक्शन! किक/म्यूट का उपयोग करें।",
+        'dump_enabled': "✅ संदेश डंप {status}!",
+        'dump_channel_set': "✅ डंप चैनल सेट किया गया!",
+        'dump_invalid_channel': "❌ अमान्य चैनल ID!",
+        'dump_error': "❌ डंप सेटिंग्स अपडेट करने में त्रुटि!",
+        'plugin_installed': "✅ प्लगइन इंस्टॉल किया गया!",
+        'plugin_error': "❌ प्लगइन इंस्टॉल करने में त्रुटि!",
+        'lock_set': "✅ {action} लॉक {status}!",
+        'lock_error': "❌ {action} लॉक सेट करने में त्रुटि!",
+        'invalid_input': "❌ अमान्य इनपुट! 'on' या 'off' का उपयोग करें।",
+        'lang_set': "✅ भाषा {lang} पर सेट की गई!",
+        'lang_error': "❌ अमान्य भाषा! 'english' या 'hindi' का उपयोग करें।",
     }
 }
 
-def tr(chat_id, key):
-    row = get_settings(str(chat_id))
-    lang = (row['lang'] if row and row['lang'] else 'en')
-    return LANG.get(lang, LANG['en']).get(key, key)
-
-# ---------- Keyboards ----------
-def kb(rows):
-    markup = types.InlineKeyboardMarkup()
-    for r in rows:
-        markup.row(*[types.InlineKeyboardButton(text=t, callback_data=d) for t, d in r])
-    return markup
-
-def main_menu_kb(chat_id):
-    return kb([
-        [("🛡️ Verify","verify"), ("👋 Welcome","welcome")],
-        [("📬 Triggers","triggers"), ("⏰ Schedule","schedule")],
-        [("🧹 Clean","clean"), ("🚫 Block","block")],
-        [("🌐 Lang","lang"), ("⚙️ Advanced","advanced")],
-        [("👥 Group","group")]
-    ])
-
-# ---------- Menus ----------
-def show_main(chat_id):
-    send_menu(chat_id, tr(chat_id, 'main'), main_menu_kb(chat_id), cache_key='main')
-
-def show_group(chat_id):
-    markup = kb([
-        [("🔒 Locks","g_locks"), ("👤 Roles","g_roles")],
-        [("📈 Analytics","g_stats"), ("🧪 Captcha","g_captcha")],
-        [("🧰 Tools","g_tools"), ("🧾 Dumps","g_dumps")],
-        [(tr(chat_id,'back'),"back_main")]
-    ])
-    send_menu(chat_id, tr(chat_id, 'group'), markup, cache_key='group')
-    
-  # ---------- Analytics ----------
-def track(chat_id, user_id, action):
+# DATABASE SETUP (ALL TABLES WITH INDEXES)
+def init_db():
     try:
-        conn = db()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO analytics(chat_id,user_id,action,at) VALUES(?,?,?,?)",
-                    (str(chat_id), str(user_id or ''), action, now_ts()))
+        conn = sqlite3.connect('bot.db')  # SQLite3 डेटाबेस
+        c = conn.cursor()
+        
+        # Core tables
+        c.execute('''CREATE TABLE IF NOT EXISTS settings 
+                     (chat_id TEXT, feature TEXT, subfeature TEXT, data TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS responses 
+                     (chat_id TEXT, type TEXT, key TEXT, response TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS schedules 
+                     (chat_id TEXT, type TEXT, time TEXT, text TEXT, active INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS blocks 
+                     (chat_id TEXT, type TEXT, item TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS warns 
+                     (chat_id TEXT, user_id TEXT, warns INTEGER, reason TEXT, timestamp TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS logs 
+                     (chat_id TEXT, action TEXT, user_id TEXT, reason TEXT, timestamp TEXT)''')
+        
+        # Additional features
+        c.execute('''CREATE TABLE IF NOT EXISTS analytics 
+                     (chat_id TEXT, user_id TEXT, action TEXT, timestamp TEXT, metadata TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS triggers 
+                     (chat_id TEXT, keyword TEXT, response TEXT, regex INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS welcome 
+                     (chat_id TEXT, welcome_msg TEXT, leave_msg TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS flood_settings 
+                     (chat_id TEXT, flood_limit INTEGER, action TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS broadcasts 
+                     (chat_id TEXT, message TEXT, sent INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS blacklists 
+                     (chat_id TEXT, word TEXT, regex INTEGER)''')
+        
+        # Advanced features
+        c.execute('''CREATE TABLE IF NOT EXISTS permissions 
+                     (chat_id TEXT, user_id TEXT, role TEXT, commands TEXT, duration TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS custom_commands 
+                     (chat_id TEXT, trigger TEXT, response TEXT, target TEXT, permissions TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS polls 
+                     (chat_id TEXT, poll_id TEXT, question TEXT, options TEXT, anonymous INTEGER, timer INTEGER, results TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS notes 
+                     (chat_id TEXT, tag TEXT, content TEXT, expire TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS rss_feeds 
+                     (chat_id TEXT, url TEXT, keywords TEXT, interval TEXT, format TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS subscriptions 
+                     (chat_id TEXT, user_id TEXT, plan TEXT, duration TEXT, active INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS federations 
+                     (chat_id TEXT, linked_group TEXT, sync_actions TEXT, share_logs INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS captchas 
+                     (chat_id TEXT, type TEXT, difficulty TEXT, time_limit INTEGER, fail_action TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS message_dump 
+                     (chat_id TEXT, deleted_msg TEXT, user_id TEXT, timestamp TEXT, dump_channel TEXT)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS plugins 
+                     (chat_id TEXT, plugin_name TEXT, config TEXT, active INTEGER)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS language_settings 
+                     (chat_id TEXT, language TEXT)''')
+        
+        # Indexes for performance
+        for table in ['settings', 'responses', 'schedules', 'blocks', 'warns', 'logs', 'analytics', 'triggers', 'welcome', 'flood_settings', 
+                      'broadcasts', 'blacklists', 'permissions', 'custom_commands', 'polls', 'notes', 'rss_feeds', 'subscriptions', 
+                      'federations', 'captchas', 'message_dump', 'plugins', 'language_settings']:
+            c.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_chat ON {table}(chat_id)')
+        
         conn.commit()
-        conn.close()
     except Exception as e:
-        logging.warning(f"analytics error: {e}")
+        logging.error(f"Database setup error: {e}")
+    finally:
+        conn.close()
 
-def stats_report(chat_id, days=7):
-    conn = db()
-    cur = conn.cursor()
-    since = now_ts() - days*86400
-    cur.execute("SELECT action, COUNT(*) c FROM analytics WHERE chat_id=? AND at>=? GROUP BY action ORDER BY c DESC",
-                (str(chat_id), since))
-    rows = cur.fetchall()
-    conn.close()
-    lines = [f"{r['action']}: {r['c']}" for r in rows] or ["(no data)"]
-    return "
-".join(lines)
+init_db()
 
-# ---------- Welcome/Leave ----------
-@bot.chat_member_handler()
-def on_member(event):
-    chat_id = event.chat.id
-    row = get_settings(str(chat_id))
-    new = event.new_chat_member
-    left = event.left_chat_member
-    if new and row['welcome_enabled']:
+def delete_previous_reply(chat_id):
+    key = f"last_reply_{chat_id}"
+    if key in bot.temp_data:
         try:
-            name = safe_html(new.user.first_name or "User")
-            bot.send_message(chat_id, f"👋 Welcome, {name}!")
-            track(chat_id, new.user.id, "welcome")
-        except Exception:
+            bot.delete_message(chat_id, bot.temp_data[key])
+        except:
             pass
-    if left and row['leave_enabled']:
-        try:
-            name = safe_html(left.first_name or "User")
-            bot.send_message(chat_id, f"👋 Bye, {name}.")
-            track(chat_id, left.id, "leave")
-        except Exception:
-            pass
+        del bot.temp_data[key]
 
-# ---------- Triggers ----------
-def match_trigger(chat_id, text):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM triggers WHERE chat_id=?", (str(chat_id),))
-    rows = cur.fetchall()
-    conn.close()
-    for r in rows:
-        pat = r['pattern']
-        if r['is_regex']:
-            try:
-                if re.search(pat, text, flags=re.I):
-                    return r['reply']
-            except re.error:
-                continue
-        else:
-            if pat.lower() in text.lower():
-                return r['reply']
+# UTILITY FUNCTIONS
+def get_language(chat_id):
+    """Get the language for a chat, default to English."""
+    try:
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute("SELECT language FROM language_settings WHERE chat_id=?", (chat_id,))
+        result = c.fetchone()
+        conn.close()
+        return result[0] if result else 'en'
+    except Exception as e:
+        logging.error(f"Error getting language: {e}")
+        return 'en'
+
+def translate(key, chat_id, **kwargs):
+    """Translate a message based on chat language."""
+    lang = get_language(chat_id)
+    text = translations.get(lang, translations['en']).get(key, translations['en'][key])
+    return text.format(**kwargs)
+
+def sanitize_input(text):
+    """Sanitize input to prevent SQL injection and Telegram formatting issues."""
+    if not text:
+        raise ValueError("Input cannot be empty")
+    text = html.escape(text.strip())  # Escape HTML characters
+    if len(text) > 4096:  # Telegram message limit
+        raise ValueError("Input too long (max 4096 characters)")
+    return text
+
+def validate_url(url):
+    """Validate URL format."""
+    url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+')
+    return bool(url_pattern.match(url))
+
+def validate_time_format(time_str):
+    """Validate time format (e.g., 1d, 2h, 30m)."""
+    time_pattern = re.compile(r'^\d+[smhd]$')
+    return bool(time_pattern.match(time_str))
+
+def validate_regex(regex_str):
+    """Validate regex pattern."""
+    try:
+        re.compile(regex_str)
+        return True
+    except re.error:
+        return False
+
+def parse_time(text): 
+    try:
+        total = sum(int(v) * {'s':1,'m':60,'h':3600,'d':86400}[u] for v,u in re.findall(r'(\d+)([smhd])', text.lower()))
+        return total if total > 0 else 300
+    except: 
+        return 300
+
+def parse_number(text): 
+    try: 
+        return max(1, int(text))
+    except: 
+        return 3
+
+def is_creator_or_admin(bot, chat_id, user_id):
+    """Check if user is creator or has admin/mod role."""
+    if str(chat_id).startswith('-'):
+        try:
+            status = bot.get_chat_member(chat_id, user_id).status
+            if status == 'creator':
+                return True
+            conn = sqlite3.connect('bot.db')
+            c = conn.cursor()
+            c.execute("SELECT role FROM permissions WHERE chat_id=? AND user_id=?", (chat_id, str(user_id)))
+            role = c.fetchone()
+            conn.close()
+            return role and role[0] in ['ADMIN', 'MOD']
+        except:
+            return False
+    return True
+
+def safe_db_operation(query, params, operation="execute"):
+    """Safely execute database operations with error handling."""
+    try:
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        if operation == "execute":
+            c.execute(query, params)
+        elif operation == "fetch":
+            c.execute(query, params)
+            return c.fetchall()
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Database error: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_settings(chat_id):
+    if chat_id in MENU_CACHE: 
+        return MENU_CACHE[chat_id]
+    settings = {}
+    rows = safe_db_operation("SELECT feature, subfeature, data FROM settings WHERE chat_id=?", (chat_id,), "fetch")
+    if rows:
+        settings = {f"{r[0]}_{r[1]}": json.loads(r[2]) for r in rows}
+    MENU_CACHE[chat_id] = settings
+    return settings
+
+def safe_json(data): 
+    return json.loads(data) if data else {'status': 'off'}
+
+def cleanup_temp_data():
+    """Remove expired temp_data entries."""
+    now = time.time()
+    for key in list(bot.temp_data.keys()):
+        if 'timeout' in bot.temp_data[key] and now > bot.temp_data[key]['timeout']:
+            del bot.temp_data[key]
+
+# Run cleanup periodically
+Thread(target=lambda: [cleanup_temp_data() or time.sleep(60) for _ in iter(int, 1)], daemon=True).start()
+
+# FLOOD PROTECTION
+def check_flood(chat_id, user_id):
+    """Check and handle flood control based on flood_settings."""
+    rows = safe_db_operation("SELECT flood_limit, action FROM flood_settings WHERE chat_id=?", (chat_id,), "fetch")
+    limit = rows[0][0] if rows else 5
+    action = rows[0][1] if rows else 'delete'
+    
+    with flood_locks[(chat_id, user_id)]:
+        now = time.time()
+        msgs = [t for t in user_messages[(chat_id, user_id)] if now - t < 60]
+        user_messages[(chat_id, user_id)] = msgs + [now]
+        
+        if len(msgs) >= limit:
+            log_activity(chat_id, user_id, f"flood_{action}", {'limit': limit})
+            return action
+    return False
+
+# ANALYTICS
+def log_activity(chat_id, user_id, action, metadata=None):
+    safe_db_operation("INSERT INTO analytics VALUES (?, ?, ?, ?, ?)", 
+                     (chat_id, str(user_id), action, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), json.dumps(metadata or {})))
+
+def get_analytics(chat_id, period='week'):
+    delta = 7 if period == 'week' else 30
+    ago = (datetime.now() - timedelta(days=delta)).strftime("%Y-%m-%d")
+    rows = safe_db_operation("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM analytics WHERE chat_id=? AND timestamp > ?", 
+                            (chat_id, ago), "fetch")
+    total, users = rows[0] if rows else (0, 0)
+    return translate('analytics_menu', chat_id, stats=f"📊 {total} actions, {users} users ({period})")
+
+# TRIGGERS
+def check_triggers(chat_id, text):
+    if (chat_id, 'triggers') in MENU_CACHE: 
+        triggers = MENU_CACHE[(chat_id, 'triggers')]
+    else:
+        triggers = safe_db_operation("SELECT keyword, response, regex FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
+        MENU_CACHE[(chat_id, 'triggers')] = triggers
+    for kw, resp, regex in triggers:
+        if regex and re.search(kw, text, re.IGNORECASE) or kw.lower() in text.lower():
+            return resp
     return None
 
-# ---------- Blacklist ----------
-def contains_blacklist(chat_id, text):
-    conn = db()
-    cur = conn.cursor()
-    cur.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-    rows = cur.fetchall()
-    conn.close()
-    t = text.lower()
-    for r in rows:
-        if r['word'].lower() in t:
+# WELCOME
+def get_welcome(chat_id, is_welcome=True):
+    row = safe_db_operation("SELECT welcome_msg, leave_msg FROM welcome WHERE chat_id=?", (chat_id,), "fetch")
+    default = translate('welcome_default', chat_id) if is_welcome else translate('leave_default', chat_id)
+    return row[0][0] if is_welcome and row and row[0][0] else row[0][1] if row and row[0][1] else default
+
+# BLACKLIST
+def check_blacklist(chat_id, text):
+    if (chat_id, 'blacklists') in MENU_CACHE: 
+        bl = MENU_CACHE[(chat_id, 'blacklists')]
+    else:
+        bl = safe_db_operation("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
+        MENU_CACHE[(chat_id, 'blacklists')] = bl
+    for word, regex in bl:
+        if regex and re.search(word, text, re.IGNORECASE) or word.lower() in text.lower():
             return True
     return False
 
-# ---------- Flood control ----------
-def check_flood(chat_id, user_id):
-    row = get_settings(str(chat_id))
-    window = clamp(safe_int(row['flood_window'], 15), 5, 120)
-    limit = clamp(safe_int(row['flood_limit'], 7), 3, 30)
-    key = (str(chat_id), str(user_id))
-    with flood_locks[key]:
-        arr = user_messages[key]
-        now = now_ts()
-        arr = [t for t in arr if now - t <= window]
-        arr.append(now)
-        user_messages[key] = arr
-        return len(arr) > limit
-        
-        # ---------- Commands ----------
+# CAPTCHA
+def generate_captcha():
+    """Generate a simple math captcha."""
+    a, b = random.randint(1, 10), random.randint(1, 10)
+    answer = a + b
+    question = f"What is {a} + {b}?"
+    options = [str(answer), str(answer + random.randint(1, 5)), str(answer - random.randint(1, 5)), str(random.randint(1, 20))]
+    random.shuffle(options)
+    return {'question': question, 'answer': str(answer), 'options': options}
+
+# START COMMAND
 @bot.message_handler(commands=['start'])
-def cmd_start(m):
-    chat_id = m.chat.id
-    track(chat_id, m.from_user.id, "start")
-    show_main(chat_id)
-
-@bot.message_handler(commands=['lang'])
-def cmd_lang(m):
-    chat_id = m.chat.id
-    row = get_settings(str(chat_id))
-    new = 'hi' if (row['lang'] == 'en') else 'en'
-    set_setting(str(chat_id), 'lang', new)
-    bot.reply_to(m, f"Lang: {new}")
-    track(chat_id, m.from_user.id, "lang_toggle")
-
-# ---------- Inline callbacks ----------
-@bot.callback_query_handler(func=lambda c: True)
-def cb(call):
-    chat_id = call.message.chat.id
-    data = call.data
-
-    # Main navigation
-    if data == 'back_main':
-        show_main(chat_id)
-        return
-    if data == 'group':
-        show_group(chat_id)
-        return
-
-    # Group submenu
-    if data == 'g_stats':
-        text = tr(chat_id, 'stats_title') + "
-
-" + stats_report(chat_id, 7) + "
-—
-" + stats_report(chat_id, 30)
-        send_menu(chat_id, text, kb([[(tr(chat_id,'back'),'group')]]))
-        return
-
-    if data == 'welcome':
-        row = get_settings(str(chat_id))
-        new = 0 if row['welcome_enabled'] else 1
-        set_setting(str(chat_id), 'welcome_enabled', new)
-        send_menu(chat_id, tr(chat_id, 'welcome_on') if new else tr(chat_id, 'welcome_off'), kb([[(tr(chat_id,'back'),'back_main')]]))
-        return
-
-    # Locks/roles/captcha/tools/dumps can be similarly routed to advanced handlers (parts below)
-    # Placeholder routing stubs here; implementations continue in next parts.
-    if data in ('g_locks','g_roles','g_captcha','g_tools','g_dumps','verify','triggers','schedule','clean','block','lang','advanced'):
-        advanced_route(chat_id, data)
-
-def advanced_route(chat_id, key):
-    # Filled in advanced sections in later parts
-    if key == 'lang':
-        row = get_settings(str(chat_id))
-        new = 'hi' if (row['lang'] == 'en') else 'en'
-        set_setting(str(chat_id), 'lang', new)
-        show_main(chat_id)
-    else:
-        send_menu(chat_id, f"Opening: {key}", kb([[(tr(chat_id,'back'),'back_main')]]))
-        
-        # ---------- Notes ----------
-@bot.message_handler(commands=['note'])
-def cmd_note(m):
-    # /note key text...
-    parts = m.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /note key content")
-        return
-    key, content = parts[1], parts[2]
-    conn = db(); cur = conn.cursor()
-    cur.execute("INSERT INTO notes(chat_id,key,content,created_at,expires_at) VALUES(?,?,?,?,?)",
-                (str(m.chat.id), key, content, now_ts(), 0))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Saved note: {key}")
-    track(m.chat.id, m.from_user.id, "note_save")
-
-@bot.message_handler(commands=['get'])
-def cmd_get(m):
-    parts = m.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: /get key")
-        return
-    key = parts[1]
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT content FROM notes WHERE chat_id=? AND key=? ORDER BY id DESC LIMIT 1",
-                (str(m.chat.id), key))
-    row = cur.fetchone(); conn.close()
-    bot.reply_to(m, row['content'] if row else "Not found")
-    track(m.chat.id, m.from_user.id, "note_get")
-
-# ---------- Custom commands ----------
-@bot.message_handler(func=lambda m: m.text and m.text.startswith('!'))
-def custom_cmd(m):
-    cmd = m.text.split()[0][1:].lower()
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT body FROM commands WHERE chat_id=? AND cmd=?", (str(m.chat.id), cmd))
-    row = cur.fetchone(); conn.close()
-    if row:
-        bot.reply_to(m, row['body'])
-        track(m.chat.id, m.from_user.id, f"cmd_{cmd}")
-
-@bot.message_handler(commands=['addcmd'])
-def cmd_addcmd(m):
-    parts = m.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /addcmd name body")
-        return
-    name, body = parts[1].lower(), parts[2]
-    conn = db(); cur = conn.cursor()
-    cur.execute("INSERT INTO commands(chat_id,cmd,body) VALUES(?,?,?)", (str(m.chat.id), name, body))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Added command: !{name}")
-    track(m.chat.id, m.from_user.id, "addcmd")
-
-# ---------- Blacklist mgmt ----------
-@bot.message_handler(commands=['blackadd'])
-def cmd_blackadd(m):
-    parts = m.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: /blackadd word")
-        return
-    w = parts[1].strip()
-    conn = db(); cur = conn.cursor()
-    cur.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(m.chat.id), w))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Blacklisted: {w}")
-    track(m.chat.id, m.from_user.id, "black_add")
-
-@bot.message_handler(commands=['blacklist'])
-def cmd_blacklist(m):
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(m.chat.id),))
-    rows = cur.fetchall(); conn.close()
-    words = ", ".join(r['word'] for r in rows) if rows else "(empty)"
-    bot.reply_to(m, words)
-
-# ---------- Dumps toggle ----------
-@bot.message_handler(commands=['dump'])
-def cmd_dump(m):
-    parts = m.text.split(maxsplit=2)
-    conn = db(); cur = conn.cursor()
-    if len(parts) >= 2 and parts[1].lower() in ('on','off'):
-        en = 1 if parts[1].lower() == 'on' else 0
-        cur.execute("INSERT INTO dumps(chat_id,enabled) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET enabled=?",
-                    (str(m.chat.id), en, en))
-        conn.commit(); conn.close()
-        bot.reply_to(m, f"Dump: {'on' if en else 'off'}")
-    else:
-        cur.execute("SELECT enabled,forward_to FROM dumps WHERE chat_id=?", (str(m.chat.id),))
-        row = cur.fetchone(); conn.close()
-        bot.reply_to(m, f"Dump: {('on' if row and row['enabled'] else 'off')}")
-        
-     # ---------- RSS minimal (urllib) ----------
-def rss_get_items(url, limit=5, timeout=8):
-    try:
-        req = Request(url, headers={"User-Agent":"Mozilla/5.0"})
-        with urlopen(req, timeout=timeout) as resp:
-            data = resp.read().decode('utf-8','ignore')
-        # naive parse for <item><title> / <link>
-        titles = re.findall(r'<title>(.*?)</title>', data, flags=re.I|re.S)
-        links = re.findall(r'<link>(.*?)</link>', data, flags=re.I|re.S)
-        items = []
-        for i in range(1, min(limit+1, len(titles), len(links))):  # skip channel title
-            t = re.sub(r'<.*?>','', titles[i]).strip()
-            l = re.sub(r'<.*?>','', links[i]).strip()
-            if t and l:
-                items.append((t, l))
-        return items
-    except (URLError, HTTPError, Exception) as e:
-        logging.warning(f"rss error: {e}")
-        return []
-
-def rss_tick():
-    while True:
-        try:
-            conn = db(); cur = conn.cursor()
-            cur.execute("SELECT chat_id, rss_json FROM settings")
-            rows = cur.fetchall()
-            now = now_ts()
-            for r in rows:
-                chat_id = r['chat_id']
-                feeds = jload(r['rss_json'], [])
-                for f in feeds or []:
-                    url = f.get('url'); interval = clamp(safe_int(f.get('interval', 900), 300, 86400))
-                    last = safe_int(f.get('last', 0))
-                    if now - last >= interval and url:
-                        items = rss_get_items(url, limit=3)
-                        for t, l in items:
-                            try:
-                                bot.send_message(chat_id, f"📰 {safe_html(t)}
-{l}")
-                            except Exception:
-                                pass
-                        f['last'] = now
-                # persist back
-                cur2 = conn.cursor()
-                cur2.execute("UPDATE settings SET rss_json=? WHERE chat_id=?", (jdump(feeds), chat_id))
-                conn.commit()
-            conn.close()
-        except Exception as e:
-            logging.warning(f"rss tick error: {e}")
-        time.sleep(20)
-
-Thread(target=rss_tick, daemon=True).start()
-
-@bot.message_handler(commands=['rss'])
-def cmd_rss(m):
-    # /rss add URL 900  or /rss list
-    parts = m.text.split()
-    if len(parts) == 1:
-        row = get_settings(str(m.chat.id))
-        feeds = jload(row['rss_json'], [])
-        text = "Feeds:
-" + "
-".join(f"- {f.get('url')} ({f.get('interval','?')}s)" for f in feeds or []) if feeds else "No feeds."
-        bot.reply_to(m, text)
-        return
-    if len(parts) >= 3 and parts[1].lower() == 'add':
-        url = parts[2]; interval = clamp(safe_int(parts[3], 900) if len(parts) >=4 else 900, 300, 86400)
-        row = get_settings(str(m.chat.id))
-        feeds = jload(row['rss_json'], [])
-        feeds = feeds or []
-        feeds.append({'url': url, 'interval': interval, 'last': 0})
-        set_setting(str(m.chat.id), 'rss_json', jdump(feeds))
-        bot.reply_to(m, "RSS added.")
-        return
-
-# ---------- Captcha (math/text) ----------
-pending_captcha = {}
-
-def captcha_new(user_id):
-    a,b = random.randint(3,12), random.randint(3,12)
-    return f"{a}+{b}=?", a+b
-
-@bot.message_handler(commands=['captcha'])
-def cmd_captcha(m):
-    q, ans = captcha_new(m.from_user.id)
-    pending_captcha[m.from_user.id] = ans
-    bot.reply_to(m, f"Solve: {q}")
-
-@bot.message_handler(func=lambda m: m.text and m.from_user.id in pending_captcha)
-def captcha_answer(m):
-    ans = pending_captcha.get(m.from_user.id)
-    if safe_int(m.text) == ans:
-        pending_captcha.pop(m.from_user.id, None)
-        bot.reply_to(m, "Verified ✅")
-        track(m.chat.id, m.from_user.id, "captcha_pass")
-    else:
-        bot.reply_to(m, "Wrong ❌")
-        track(m.chat.id, m.from_user.id, "captcha_fail")
-
-# ---------- Roles & Locks (basic granular) ----------
-def get_roles(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['roles_json'], {}) or {}
-
-def set_roles(chat_id, roles):
-    set_setting(str(chat_id), 'roles_json', jdump(roles))
-
-def get_locks(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['locks_json'], {}) or {}
-
-def set_locks(chat_id, locks):
-    set_setting(str(chat_id), 'locks_json', jdump(locks))
-
-@bot.message_handler(commands=['lock'])
-def cmd_lock(m):
-    # /lock links on|off
-    parts = m.text.split()
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /lock feature on|off")
-        return
-    feature = parts[1].lower()
-    val = 1 if parts[2].lower()=='on' else 0
-    locks = get_locks(m.chat.id)
-    locks[feature] = val
-    set_locks(m.chat.id, locks)
-    bot.reply_to(m, f"Lock {feature}: {'on' if val else 'off'}")
+def start(message):
+    chat_id = str(message.chat.id)
+    user = message.from_user
+    log_activity(chat_id, user.id, 'start')
     
-    # ---------- Message filters ----------
-@bot.message_handler(func=lambda m: bool(m.text))
-def all_text(m):
-    # blacklist
-    if contains_blacklist(m.chat.id, m.text):
-        try:
-            bot.delete_message(m.chat.id, m.message_id)
-        except Exception:
-            pass
-        track(m.chat.id, m.from_user.id, "blacklist_delete")
-        return
-
-    # flood
-    if check_flood(m.chat.id, m.from_user.id):
-        try:
-            bot.delete_message(m.chat.id, m.message_id)
-        except Exception:
-            pass
-        track(m.chat.id, m.from_user.id, "flood_delete")
-        return
-
-    # triggers
-    reply = match_trigger(m.chat.id, m.text)
-    if reply:
-        bot.reply_to(m, reply)
-        track(m.chat.id, m.from_user.id, "trigger_reply")
-
-# ---------- Federation-lite ----------
-def federation_sync(chats, payload):
-    # No external calls; just local broadcast to listed chats
-    for c in chats:
-        try:
-            bot.send_message(c, f"[Federation] {payload}")
-        except Exception:
-            pass
-
-@bot.message_handler(commands=['federate'])
-def cmd_federate(m):
-    # /federate chat_id1 chat_id2 ... : message
-    parts = m.text.split()
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /federate <chat_ids...> : <text>")
-        return
-    if ':' not in m.text:
-        bot.reply_to(m, "Missing ':' separator")
-        return
-    ids_part, text_part = m.text.split(':', 1)
-    chat_ids = [p for p in ids_part.split()[1:] if p.isdigit()]
-    payload = text_part.strip()
-    federation_sync(chat_ids, payload)
-    bot.reply_to(m, f"Sent to {len(chat_ids)} chats.")
-
-# ---------- Subscriptions ----------
-def subs_get(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['subscriptions_json'], []) or []
-
-def subs_set(chat_id, arr):
-    set_setting(str(chat_id), 'subscriptions_json', jdump(arr))
-
-@bot.message_handler(commands=['sub'])
-def cmd_sub(m):
-    # /sub add name 7d | /sub list
-    parts = m.text.split()
-    if len(parts)==1:
-        arr = subs_get(m.chat.id)
-        txt = "Subscriptions:
-" + "
-".join(f"- {a['name']} till {a['until']}" for a in arr) if arr else "No subs."
-        bot.reply_to(m, txt); return
-    if len(parts)>=4 and parts[1]=='add':
-        name = parts[2]
-        dur = parts[3].lower()
-        days = 30 if dur.endswith('m') else safe_int(dur.rstrip('d'),7)
-        until = (datetime.utcnow()+timedelta(days=days)).strftime('%Y-%m-%d')
-        arr = subs_get(m.chat.id); arr.append({'name':name,'until':until})
-        subs_set(m.chat.id, arr)
-        bot.reply_to(m, f"Added sub {name} till {until}")
-
-# ---------- Advanced routes bodies ----------
-def advanced_route(chat_id, key):
-    if key == 'lang':
-        row = get_settings(str(chat_id))
-        new = 'hi' if (row['lang'] == 'en') else 'en'
-        set_setting(str(chat_id), 'lang', new)
-        show_main(chat_id); return
-
-    if key == 'g_tools':
-        send_menu(chat_id, "Tools:
-- /note
-- /get
-- /addcmd
-- /blackadd
-- /blacklist
-- /dump on|off
-- /rss add <url> <sec>",
-                  kb([[(tr(chat_id,'back'),'group')]])); return
-
-    if key == 'g_locks':
-        locks = jdump(get_locks(chat_id))
-        send_menu(chat_id, f"Locks: {locks}", kb([[("Lock links on","LOCK_links_on"),("Lock links off","LOCK_links_off")],
-                                                 [(tr(chat_id,'back'),'group')]])); return
-
-    if key == 'g_roles':
-        roles = jdump(get_roles(chat_id))
-        send_menu(chat_id, f"Roles: {roles}", kb([[(tr(chat_id,'back'),'group')]])); return
-
-    if key == 'g_captcha':
-        send_menu(chat_id, "Captcha: use /captcha to test.", kb([[(tr(chat_id,'back'),'group')]])); return
-
-    if key == 'g_dumps':
-        send_menu(chat_id, "Dumps: /dump on|off", kb([[(tr(chat_id,'back'),'group')]])); return
-
-    if key == 'verify':
-        send_menu(chat_id, "Verification tools ready.", kb([[(tr(chat_id,'back'),'back_main')]])); return
-
-    if key == 'triggers':
-        send_menu(chat_id, "Triggers: add via DB later or commands.", kb([[(tr(chat_id,'back'),'back_main')]])); return
-
-    if key == 'schedule':
-        send_menu(chat_id, "Scheduler coming (use RSS interval for demo).", kb([[(tr(chat_id,'back'),'back_main')]])); return
-
-    if key == 'clean':
-        send_menu(chat_id, "Clean rules configurable later.", kb([[(tr(chat_id,'back'),'back_main')]])); return
-
-    if key == 'block':
-        send_menu(chat_id, "Blacklist: /blackadd, /blacklist", kb([[(tr(chat_id,'back'),'back_main')]])); return
-
-    if key == 'advanced':
-        send_menu(chat_id, "Advanced: Roles, Locks, RSS, Dumps, Federation, Subs.", kb([[(tr(chat_id,'back'),'back_main')]])); return
-        
-        # ---------- Plugin registry (DB-stored, no dynamic import) ----------
-def plugins_get(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['plugins_json'], []) or []
-
-def plugins_set(chat_id, arr):
-    set_setting(str(chat_id), 'plugins_json', jdump(arr))
-
-@bot.message_handler(commands=['plugin'])
-def cmd_plugin(m):
-    # /plugin list | /plugin add name on|off
-    parts = m.text.split()
-    if len(parts)==1 or parts[1]=='list':
-        arr = plugins_get(m.chat.id)
-        txt = "Plugins:
-" + "
-".join(f"- {p['name']}: {'on' if p.get('on') else 'off'}" for p in arr) if arr else "No plugins."
-        bot.reply_to(m, txt); return
-    if len(parts)>=4 and parts[1]=='add':
-        name, onoff = parts[2], parts[3].lower()
-        arr = plugins_get(m.chat.id)
-        found = next((p for p in arr if p['name']==name), None)
-        if found: found['on'] = (onoff=='on')
-        else: arr.append({'name':name,'on':(onoff=='on')})
-        plugins_set(m.chat.id, arr)
-        bot.reply_to(m, f"Plugin {name}: {onoff}")
-
-# ---------- MENU_CACHE invalidation helpers ----------
-def cache_invalidate_for(chat_id, keys):
-    for k in keys:
-        MENU_CACHE.pop((chat_id, k), None)
-
-# ---------- Dumps forwarder (if toggled) ----------
-@bot.message_handler(content_types=['photo','video','document','audio','sticker','voice','text'])
-def dump_forward(m):
-    conn = db(); cur = conn.cursor()
-    cur.execute("SELECT enabled,forward_to FROM dumps WHERE chat_id=?", (str(m.chat.id),))
-    row = cur.fetchone(); conn.close()
-    if not row or not row['enabled']:
-        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('main_menu', chat_id).split('\n')[0], callback_data='main'),
+        types.InlineKeyboardButton(translate('commands_list', chat_id).split('\n')[0], callback_data='show_commands')
+    )
+    
+    if message.chat.type == 'private':
+        markup.add(
+            types.InlineKeyboardButton("➕ Add to Group", url=f"t.me/{bot.get_me().username}?startgroup=true"),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='help')
+        )
+        text = translate('start_private', chat_id, user=user.first_name)
+        sent_message = bot.reply_to(message, text, reply_markup=markup)
+    else:
+        markup.add(
+            types.InlineKeyboardButton(translate('analytics_menu', chat_id).split('\n')[0], callback_data='analytics_menu'),
+            types.InlineKeyboardButton(translate('triggers_menu', chat_id).split('\n')[0], callback_data='triggers_menu'),
+            types.InlineKeyboardButton(translate('welcome_menu', chat_id).split('\n')[0], callback_data='welcome_menu'),
+            types.InlineKeyboardButton(translate('flood_menu', chat_id).split('\n')[0], callback_data='flood_menu'),
+            types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[0], callback_data='broadcast_menu'),
+            types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[0], callback_data='blacklist_menu')
+        )
+        text = translate('start_group', chat_id)
+        sent_message = bot.send_message(chat_id, text, reply_markup=markup)
+    
+    # Auto-delete after 2s
+    time.sleep(2)
     try:
-        # Simple re-send summary
-        if getattr(m, 'text', None):
-            bot.send_message(m.chat.id, f"[Dump] {safe_html(m.text[:200])}")
-        else:
-            bot.send_message(m.chat.id, "[Dump] media received.")
-    except Exception:
+        bot.delete_message(chat_id, sent_message.message_id)
+    except:
         pass
+
+# STATUS COMMAND
+@bot.message_handler(commands=['status'])
+def status_command(message):
+    chat_id = str(message.chat.id)
+    if message.chat.type == 'private' or not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, translate('admin_only', chat_id))
+    
+    settings = get_all_settings(chat_id)
+    status_text = "🔧 ADVANCED SETTINGS:\n"
+    
+    checks = {
+        'moderation_antinsfw': '🔍 Anti-NSFW',
+        'moderation_captcha': '🛡️ CAPTCHA', 
+        'moderation_lock_links': '🔗 Links',
+        'moderation_lock_media': '📸 Media',
+        'moderation_lock_stickers': '😀 Stickers',
+        'moderation_lock_forwards': '📤 Forwards',
+        'analytics': '📊 Analytics',
+        'flood_settings': '🛡️ Anti-Flood',
+        'blacklists': '🚫 Filters'
+    }
+    
+    for key, name in checks.items():
+        status = safe_json(settings.get(key, '{}'))['status']
+        status_text += f"{name}: {'✅' if status == 'on' else '❌'}\n"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('group_menu', chat_id).split('\n')[0], callback_data='group_menu'),
+        types.InlineKeyboardButton(translate('commands_list', chat_id).split('\n')[0], callback_data='show_commands')
+    )
+    bot.reply_to(message, status_text, reply_markup=markup)
+
+# LANGUAGE COMMAND
+@bot.message_handler(commands=['lang'])
+def lang_command(message):
+    chat_id = str(message.chat.id)
+    bot.temp_data[chat_id] = {'action': 'lang_set', 'timeout': time.time() + 300}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇬🇧 English", callback_data='lang_english'),
+        types.InlineKeyboardButton("🇮🇳 Hindi", callback_data='lang_hindi'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main')
+    )
+    bot.reply_to(message, translate('lang_menu', chat_id), reply_markup=markup)
+
+# CONTENT HANDLER
+@bot.message_handler(content_types=['text'])
+def content_handler(message):
+    chat_id = str(message.chat.id)
+    text = sanitize_input(message.text)
+    user_id = str(message.from_user.id)
+    log_activity(chat_id, user_id, 'message', {'text': text})
+    
+    # Save message to dump if enabled
+    settings = get_all_settings(chat_id)
+    if safe_json(settings.get('message_dump', '{}'))['status'] == 'on':
+        rows = safe_db_operation("SELECT dump_channel FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+        if rows:
+            safe_db_operation("INSERT INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                            (chat_id, text, user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rows[0][0]))
+    
+    # ANTI-FLOOD
+    flood_action = check_flood(chat_id, user_id)
+    if flood_action:
+        bot.delete_message(chat_id, message.message_id)
+        if flood_action == 'mute':
+            bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False})
+            bot.reply_to(message, translate('flood_mute', chat_id))
+        elif flood_action == 'ban':
+            bot.kick_chat_member(chat_id, user_id)
+            bot.reply_to(message, translate('flood_ban', chat_id))
+        else:
+            bot.reply_to(message, translate('flood_violation', chat_id))
+        return
+    
+    # BLACKLIST
+    if check_blacklist(chat_id, text):
+        bot.delete_message(chat_id, message.message_id)
+        log_activity(chat_id, user_id, 'blacklist_hit')
+        return bot.reply_to(message, translate('blacklist_blocked', chat_id))
+    
+    # TRIGGERS
+    trigger = check_triggers(chat_id, text)
+    if trigger:
+        return bot.reply_to(message, trigger)
+    
+    # ORIGINAL LOCKS
+    if message.entities and any(e.type == 'url' for e in message.entities) and safe_json(settings.get('moderation_lock_links', '{}'))['status'] == 'on':
+        bot.delete_message(chat_id, message.message_id)
+        return bot.reply_to(message, translate('lock_set', chat_id, action='Links', status='enabled'))
+    
+    # HANDLE TEMP DATA INPUTS
+    if chat_id in bot.temp_data:
+        action = bot.temp_data[chat_id].get('action')
+        if action:
+            handlers = {
+                'grant_role': handle_grant_input,
+                'triggers_add': handle_triggers_add,
+                'triggers_edit': handle_triggers_edit_delete,
+                'triggers_delete': handle_triggers_edit_delete,
+                'welcome_set': handle_welcome_set,
+                'flood_set_limit': handle_flood_set_limit,
+                'flood_enable': handle_flood_enable,
+                'broadcast_send': handle_broadcast_send,
+                'broadcast_groups': handle_broadcast_groups,
+                'blacklist_add': handle_blacklist_add,
+                'customcmd_create': handle_customcmd_create,
+                'customcmd_edit': handle_customcmd_edit,
+                'poll_new': handle_poll_new,
+                'note_save': handle_note_save,
+                'rss_add': handle_rss_add,
+                'sub_grant': handle_sub_grant,
+                'fed_link': handle_fed_link,
+                'captcha_set': handle_captcha_set,
+                'dump_set': handle_dump_set,
+                'plugin_install': handle_plugin_install,
+                'lang_set': handle_lang_set
+            }
+            if action in handlers:
+                handlers[action](message)
+                return
+
+# HANDLERS
+def handle_triggers_edit_delete(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    action = bot.temp_data[chat_id]['action']
+    keyword = sanitize_input(message.text)
+    
+    if action == 'triggers_edit' and 'sub_action' not in bot.temp_data[chat_id]:
+        bot.temp_data[chat_id]['sub_action'] = 'edit_response'
+        bot.temp_data[chat_id]['keyword'] = keyword
+        bot.temp_data[chat_id]['timeout'] = time.time() + 300
+        bot.reply_to(message, translate('trigger_updated', chat_id, keyword=keyword).replace("updated", "Send new response for"))
+        return
+    
+    if action == 'triggers_edit' and bot.temp_data[chat_id].get('sub_action') == 'edit_response':
+        new_response = sanitize_input(message.text)
+        keyword = bot.temp_data[chat_id]['keyword']
+        if len(new_response) > 1000:
+            return bot.reply_to(message, translate('trigger_too_long', chat_id))
+        if safe_db_operation("UPDATE triggers SET response=? WHERE chat_id=? AND keyword=?", 
+                           (new_response, chat_id, keyword)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('trigger_updated', chat_id, keyword=keyword))
+        else:
+            bot.reply_to(message, translate('trigger_not_found', chat_id))
+    
+    elif action == 'triggers_delete':
+        if safe_db_operation("DELETE FROM triggers WHERE chat_id=? AND keyword=?", (chat_id, keyword)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('trigger_deleted', chat_id))
+        else:
+            bot.reply_to(message, translate('trigger_not_found', chat_id))
+
+def handle_flood_enable(message):
+    chat_id = str(message.chat.id)
+    status = 'on' if message.text.lower() == 'on' else 'off'
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'flood', 'status', ?)", 
+                       (chat_id, json.dumps({'status': status}))):
+        bot.reply_to(message, translate('flood_enabled', chat_id, status='enabled' if status == 'on' else 'disabled'))
+    else:
+        bot.reply_to(message, translate('flood_enabled', chat_id, status='error'))
+
+def handle_broadcast_groups(message):
+    chat_id = str(message.chat.id)
+    bot.reply_to(message, "👥 All groups selected!")  # Placeholder
+
+def handle_customcmd_edit(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    if 'sub_action' in bot.temp_data[chat_id]:
+        trigger = bot.temp_data[chat_id]['trigger']
+        new_response = sanitize_input(message.text)
+        if len(new_response) > 1000:
+            return bot.reply_to(message, translate('command_too_long', chat_id))
+        if safe_db_operation("UPDATE custom_commands SET response=? WHERE chat_id=? AND trigger=?", 
+                           (new_response, chat_id, trigger)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('command_updated', chat_id, trigger=trigger))
+        else:
+            bot.reply_to(message, translate('command_updated', chat_id, trigger='error'))
+    else:
+        bot.temp_data[chat_id]['sub_action'] = 'edit_response'
+        bot.temp_data[chat_id]['trigger'] = sanitize_input(message.text.strip('/ '))
+        bot.temp_data[chat_id]['timeout'] = time.time() + 300
+        bot.reply_to(message, f"✏️ Send new response for /{message.text}:")
+
+def handle_lang_set(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    lang = message.text.lower()
+    if lang not in ['english', 'hindi']:
+        return bot.reply_to(message, translate('lang_error', chat_id))
+    lang_code = 'en' if lang == 'english' else 'hi'
+    if safe_db_operation("INSERT OR REPLACE INTO language_settings VALUES (?, ?)", (chat_id, lang_code)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('lang_set', chat_id, lang=lang))
+    else:
+        bot.reply_to(message, translate('lang_error', chat_id))
+
+# NEW MEMBER
+@bot.message_handler(content_types=['new_chat_members'])
+def new_member_welcome(message):
+    chat_id = str(message.chat.id)
+    for user in message.new_chat_members:
+        welcome = get_welcome(chat_id)
+        bot.send_message(chat_id, f"{welcome} @{user.username or user.first_name}!")
+        log_activity(chat_id, user.id, 'join')
         
-        # ---------- Run ----------
-def bg_housekeep():
-    # future: clean expired notes/subs/punishments
-    while True:
-        # expire notes
-        try:
-            conn = db(); cur = conn.cursor()
-            cur.execute("DELETE FROM notes WHERE expires_at>0 AND expires_at<?", (now_ts(),))
-            conn.commit(); conn.close()
-        except Exception as e:
-            logging.warning(f"housekeep: {e}")
-        time.sleep(60)
+        # CAPTCHA
+        settings = get_all_settings(chat_id)
+        if safe_json(settings.get('moderation_captcha', '{}'))['status'] == 'on':
+            captcha = generate_captcha()
+            bot.temp_data[f"{chat_id}_{user.id}"] = {'action': 'captcha_verify', 'answer': captcha['answer'], 'timeout': time.time() + 300}
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            for i in range(0, len(captcha['options']), 2):
+                markup.add(
+                    types.InlineKeyboardButton(captcha['options'][i], callback_data=f"captcha_{captcha['options'][i]}_{user.id}"),
+                    types.InlineKeyboardButton(captcha['options'][i+1], callback_data=f"captcha_{captcha['options'][i+1]}_{user.id}") if i+1 < len(captcha['options']) else types.InlineKeyboardButton(" ", callback_data="noop")
+                )
+            bot.send_message(chat_id, f"🛡️ @{user.username or user.first_name}, solve: {captcha['question']} (5 min)", reply_markup=markup)
 
-Thread(target=bg_housekeep, daemon=True).start()
+# CAPTCHA VERIFICATION
+@bot.callback_query_handler(func=lambda call: call.data.startswith('captcha_'))
+def captcha_verify(call):
+    chat_id = str(call.message.chat.id)
+    _, answer, user_id = call.data.split('_')
+    key = f"{chat_id}_{user_id}"
+    if key not in bot.temp_data:
+        bot.answer_callback_query(call.id, translate('captcha_expired', chat_id))
+        return
+    data = bot.temp_data[key]
+    if time.time() > data['timeout']:
+        bot.answer_callback_query(call.id, translate('captcha_timeout', chat_id))
+        bot.kick_chat_member(chat_id, user_id)
+        del bot.temp_data[key]
+        return
+    if answer == data['answer']:
+        bot.answer_callback_query(call.id, translate('captcha_verified', chat_id))
+        bot.delete_message(chat_id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, translate('captcha_wrong', chat_id))
+        bot.kick_chat_member(chat_id, user_id)
+    del bot.temp_data[key]
 
-if __name__ == '__main__':
-    logging.info("Bot starting...")
-    # Choreo-safe: non-stop polling with restart-on-error
-    while True:
+# LEFT MEMBER
+@bot.message_handler(content_types=['left_chat_member'])
+def left_member(message):
+    chat_id = str(message.chat.id)
+    user = message.left_chat_member
+    leave = get_welcome(chat_id, False)
+    bot.send_message(chat_id, f"{leave} @{user.username or user.first_name}")
+    log_activity(chat_id, user.id, 'leave')
+
+# SETTINGS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'main')
+def settings_menu(call):
+    bot.answer_callback_query(call.id, "⚙️ Loading...", show_alert=False)
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        ("🛡️ Verify", 'verify'), (translate('welcome_menu', chat_id).split('\n')[0], 'welcome_menu'),
+        (translate('triggers_menu', chat_id).split('\n')[0], 'triggers_menu'), ("⏰ Schedule", 'scheduled'),
+        (translate('group_menu', chat_id).split('\n')[0], 'group_menu'), ("🧹 Clean", 'autoclean'),
+        ("🚫 Block", 'block'), (translate('lang_menu', chat_id).split('\n')[0], 'lang_menu'),
+        (translate('advanced_menu', chat_id).split('\n')[0], 'advanced_menu'), (translate('commands_list', chat_id).split('\n')[0], 'show_commands')
+    ]
+    markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
+    
+    bot.edit_message_text(translate('main_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+# LANGUAGE MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'lang_menu')
+def lang_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇬🇧 English", callback_data='lang_english'),
+        types.InlineKeyboardButton("🇮🇳 Hindi", callback_data='lang_hindi'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main')
+    )
+    
+    bot.edit_message_text(translate('lang_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
+def lang_action(call):
+    chat_id = str(call.message.chat.id)
+    lang = call.data.split('_')[1]
+    lang_code = 'en' if lang == 'english' else 'hi'
+    
+    if safe_db_operation("INSERT OR REPLACE INTO language_settings VALUES (?, ?)", (chat_id, lang_code)):
+        bot.edit_message_text(translate('lang_set', chat_id, lang=lang), chat_id, call.message.message_id)
+    else:
+        bot.edit_message_text(translate('lang_error', chat_id), chat_id, call.message.message_id)
+
+# GROUP MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'group_menu')
+def group_menu(call):
+    if not is_creator_or_admin(bot, str(call.message.chat.id), call.from_user.id):
+        return bot.edit_message_text(translate('admin_only', call.message.chat.id), call.message.chat.id, call.message.message_id)
+    
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        (translate('moderation_lock_menu', chat_id).split('\n')[0], 'moderation_lock'), (translate('captcha_menu', chat_id).split('\n')[0], 'moderation_captcha'),
+        (translate('analytics_menu', chat_id).split('\n')[0], 'analytics_menu'), (translate('triggers_menu', chat_id).split('\n')[0], 'triggers_menu'),
+        (translate('welcome_menu', chat_id).split('\n')[0], 'welcome_menu'), (translate('flood_menu', chat_id).split('\n')[0], 'flood_menu'),
+        (translate('broadcast_menu', chat_id).split('\n')[0], 'broadcast_menu'), (translate('blacklist_menu', chat_id).split('\n')[0], 'blacklist_menu'),
+        (translate('permissions_menu', chat_id).split('\n')[0], 'permissions_menu'), (translate('customcmd_menu', chat_id).split('\n')[0], 'customcmd_menu'),
+        (translate('polls_menu', chat_id).split('\n')[0], 'polls_menu'), (translate('notes_menu', chat_id).split('\n')[0], 'notes_menu'),
+        (translate('rss_menu', chat_id).split('\n')[0], 'rss_menu'), (translate('subs_menu', chat_id).split('\n')[0], 'subs_menu'),
+        (translate('fed_menu', chat_id).split('\n')[0], 'fed_menu'), (translate('captcha_menu', chat_id).split('\n')[0], 'captcha_menu'),
+        (translate('dump_menu', chat_id).split('\n')[0], 'dump_menu'), (translate('plugins_menu', chat_id).split('\n')[0], 'plugins_menu')
+    ]
+    markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
+    
+    bot.edit_message_text(translate('group_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+# ANALYTICS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'analytics_menu')
+def analytics_menu(call):
+    bot.answer_callback_query(call.id, "📊 Loading...")
+    chat_id = str(call.message.chat.id)
+    stats = get_analytics(chat_id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
+        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
+        types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(stats, chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('analytics_'))
+def analytics_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'week':
+        stats = get_analytics(chat_id, 'week')
+    elif action == 'month':
+        stats = get_analytics(chat_id, 'month')
+    elif action == 'report':
+        stats = "📤 Report sent to logs (placeholder)."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📈 Weekly", callback_data='analytics_week'),
+        types.InlineKeyboardButton("📉 Monthly", callback_data='analytics_month'),
+        types.InlineKeyboardButton("📤 Report", callback_data='analytics_report'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='analytics_menu')
+    )
+    bot.edit_message_text(stats, chat_id, call.message.message_id, reply_markup=markup)
+
+# TRIGGERS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'triggers_menu')
+def triggers_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("➕ Add", callback_data='triggers_add'),
+        types.InlineKeyboardButton("📝 List", callback_data='triggers_list'),
+        types.InlineKeyboardButton("✏️ Edit", callback_data='triggers_edit'),
+        types.InlineKeyboardButton("🗑️ Delete", callback_data='triggers_delete'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
+    )
+    
+    bot.edit_message_text(translate('triggers_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('triggers_'))
+def triggers_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'add':
+        text = translate('triggers_menu', chat_id).split('\n')[0] + "\n\n" \
+               "📝 Keyword: Simple word match\n" \
+               "⚡ Regex: Advanced pattern"
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("📝 Keyword", callback_data='triggers_add_keyword'),
+            types.InlineKeyboardButton("⚡ Regex", callback_data='triggers_add_regex'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action in ['add_keyword', 'add_regex']:
+        bot.temp_data[chat_id] = {'action': 'triggers_add', 'regex': 1 if 'regex' in action else 0, 'timeout': time.time() + 300}
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("ℹ️ Help", callback_data='triggers_help')
+        )
+        bot.edit_message_text("Send: keyword|response\nE.g., hello|Hi there!", chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'list':
+        triggers = safe_db_operation("SELECT keyword, response FROM triggers WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('triggers_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {kw}: {resp}" for kw, resp in triggers) or "No triggers."
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("➕ Add", callback_data='triggers_add'),
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'edit' or action == 'delete':
+        bot.temp_data[chat_id] = {'action': f'triggers_{action}', 'timeout': time.time() + 300}
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Cancel", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("📝 List", callback_data='triggers_list')
+        )
+        bot.edit_message_text(f"Send keyword to {action}:", chat_id, call.message.message_id, reply_markup=markup)
+    
+    elif action == 'help':
+        text = translate('triggers_menu', chat_id).split('\n')[0] + " Help:\n\n- Add: Create keyword or regex triggers\n- Edit/Delete: Modify or remove\n- Format: keyword|response"
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("⬅️ Back", callback_data='triggers_menu'),
+            types.InlineKeyboardButton("➕ Add", callback_data='triggers_add')
+        )
+        bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_triggers_add(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    data = bot.temp_data[chat_id]
+    try:
+        kw, resp = message.text.split('|', 1)
+        kw = sanitize_input(kw.strip())
+        resp = sanitize_input(resp.strip())
+        if data['regex'] and not validate_regex(kw):
+            return bot.reply_to(message, translate('invalid_regex', chat_id))
+        if len(kw) > 100 or len(resp) > 1000:
+            return bot.reply_to(message, translate('trigger_too_long', chat_id))
+        if safe_db_operation("SELECT 1 FROM triggers WHERE chat_id=? AND keyword=?", (chat_id, kw), "fetch"):
+            return bot.reply_to(message, translate('trigger_exists', chat_id))
+        if safe_db_operation("INSERT INTO triggers VALUES (?, ?, ?, ?)", (chat_id, kw, resp, data['regex'])):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('trigger_added', chat_id))
+        else:
+            bot.reply_to(message, translate('trigger_not_found', chat_id))
+    except ValueError as e:
+        bot.reply_to(message, f"❌ {str(e)}")
+
+# WELCOME MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'welcome_menu')
+def welcome_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("👋 Set Welcome", callback_data='welcome_set'),
+        types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview'),
+        types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('welcome_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data in ['welcome_set', 'leave_set'])
+def welcome_action(call):
+    action = call.data
+    chat_id = str(call.message.chat.id)
+    bot.temp_data[chat_id] = {'action': action, 'timeout': time.time() + 300}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Cancel", callback_data='welcome_menu'),
+        types.InlineKeyboardButton("👋 Preview", callback_data='welcome_preview')
+    )
+    bot.edit_message_text(f"Send new {'welcome' if 'welcome' in action else 'leave'} message:", chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'welcome_preview')
+def welcome_preview(call):
+    chat_id = str(call.message.chat.id)
+    welcome, leave = get_welcome(chat_id), get_welcome(chat_id, False)
+    text = f"👋 Welcome: {welcome}\n🚪 Leave: {leave}"
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("👋 Set Welcome", callback_data='welcome_set'),
+        types.InlineKeyboardButton("🚪 Set Leave", callback_data='leave_set')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_welcome_set(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    action = bot.temp_data[chat_id]['action']
+    msg = sanitize_input(message.text)
+    if len(msg) < 1:
+        return bot.reply_to(message, translate('welcome_empty', chat_id))
+    if safe_db_operation("INSERT OR REPLACE INTO welcome VALUES (?, ?, ?)", 
+                       (chat_id, msg if 'welcome' in action else None, msg if 'leave' in action else None)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('welcome_set', chat_id))
+    else:
+        bot.reply_to(message, translate('welcome_set', chat_id).replace("set", "error setting"))
+
+# ANTI-FLOOD MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'flood_menu')
+def flood_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🛡️ Enable", callback_data='flood_enable'),
+        types.InlineKeyboardButton("⚙️ Set Limit", callback_data='flood_limit'),
+        types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('flood_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('flood_'))
+def flood_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'enable':
+        bot.temp_data[chat_id] = {'action': 'flood_enable', 'timeout': time.time() + 300}
+        text = translate('flood_menu', chat_id).split('\n')[0] + ": Send 'on' or 'off' to enable/disable flood protection:"
+    elif action == 'limit':
+        bot.temp_data[chat_id] = {'action': 'flood_set_limit', 'timeout': time.time() + 300}
+        text = "⚙️ Send new limit (e.g., 5):"
+    elif action == 'stats':
+        text = "📊 Flood stats: 0 incidents (placeholder)."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='flood_menu'),
+        types.InlineKeyboardButton("📊 Stats", callback_data='flood_stats')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_flood_set_limit(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        limit = parse_number(message.text)
+        if limit < 1 or limit > 50:
+            return bot.reply_to(message, translate('flood_invalid_limit', chat_id))
+        if safe_db_operation("INSERT OR REPLACE INTO flood_settings VALUES (?, ?, ?)", (chat_id, limit, 'delete')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('flood_limit_set', chat_id, limit=limit))
+        else:
+            bot.reply_to(message, translate('flood_limit_set', chat_id).replace("set", "error setting"))
+    except ValueError:
+        bot.reply_to(message, translate('flood_invalid_number', chat_id))
+
+# BROADCAST MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'broadcast_menu')
+def broadcast_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[2], callback_data='broadcast_send'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[3], callback_data='broadcast_groups'),
+        types.InlineKeyboardButton(translate('broadcast_menu', chat_id).split('\n')[4], callback_data='broadcast_preview'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('broadcast_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('broadcast_'))
+def broadcast_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'send':
+        bot.temp_data[chat_id] = {'action': 'broadcast_send', 'timeout': time.time() + 300}
+        text = translate('broadcast_menu', chat_id).split('\n')[0] + ": Send the broadcast message:"
+    elif action == 'groups':
+        bot.temp_data[chat_id] = {'action': 'broadcast_groups', 'timeout': time.time() + 300}
+        text = "👥 Send group IDs (comma-separated):"
+    elif action == 'preview':
+        rows = safe_db_operation("SELECT message FROM broadcasts WHERE chat_id=? AND sent=0", (chat_id,), "fetch")
+        text = rows[0][0] if rows else "📋 No broadcast message set."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='broadcast_menu'),
+        types.InlineKeyboardButton("📢 Send Now", callback_data='broadcast_send')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_broadcast_send(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    msg = sanitize_input(message.text)
+    if safe_db_operation("INSERT INTO broadcasts VALUES (?, ?, 0)", (chat_id, msg)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('broadcast_menu', chat_id).split('\n')[0] + ": Message saved for broadcast!")
+    else:
+        bot.reply_to(message, "❌ Error saving broadcast message!")
+
+# BLACKLIST MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'blacklist_menu')
+def blacklist_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[2], callback_data='blacklist_add_word'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[3], callback_data='blacklist_add_regex'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[4], callback_data='blacklist_list'),
+        types.InlineKeyboardButton(translate('blacklist_menu', chat_id).split('\n')[5], callback_data='blacklist_remove'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('blacklist_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('blacklist_'))
+def blacklist_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'add_word' or action == 'add_regex':
+        bot.temp_data[chat_id] = {'action': 'blacklist_add', 'regex': 1 if 'regex' in action else 0, 'timeout': time.time() + 300}
+        text = "Send word or regex to blacklist:"
+    elif action == 'list':
+        bl = safe_db_operation("SELECT word, regex FROM blacklists WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('blacklist_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {w} {'(regex)' if r else ''}" for w, r in bl) or "No blacklisted words."
+    elif action == 'remove':
+        bot.temp_data[chat_id] = {'action': 'blacklist_remove', 'timeout': time.time() + 300}
+        text = "Send word/regex to remove from blacklist:"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='blacklist_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='blacklist_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_blacklist_add(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    word = sanitize_input(message.text)
+    regex = bot.temp_data[chat_id]['regex']
+    
+    if regex and not validate_regex(word):
+        return bot.reply_to(message, translate('invalid_regex', chat_id))
+    if len(word) > 100:
+        return bot.reply_to(message, translate('blacklist_too_long', chat_id))
+    if safe_db_operation("SELECT 1 FROM blacklists WHERE chat_id=? AND word=?", (chat_id, word), "fetch"):
+        return bot.reply_to(message, translate('blacklist_exists', chat_id))
+    if safe_db_operation("INSERT INTO blacklists VALUES (?, ?, ?)", (chat_id, word, regex)):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('blacklist_added', chat_id))
+    else:
+        bot.reply_to(message, translate('blacklist_added', chat_id).replace("added", "error adding"))
+
+# PERMISSIONS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'permissions_menu')
+def permissions_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[2], callback_data='permissions_grant'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[3], callback_data='permissions_list'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[4], callback_data='permissions_commands'),
+        types.InlineKeyboardButton(translate('permissions_menu', chat_id).split('\n')[5], callback_data='permissions_duration'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('permissions_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('permissions_'))
+def permissions_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'grant':
+        bot.temp_data[chat_id] = {'action': 'grant_role', 'timeout': time.time() + 300}
+        text = "Send user ID and role (e.g., @username ADMIN):"
+    elif action == 'list':
+        roles = safe_db_operation("SELECT user_id, role FROM permissions WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('permissions_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {uid}: {role}" for uid, role in roles) or "No roles assigned."
+    elif action == 'commands' or action == 'duration':
+        bot.temp_data[chat_id] = {'action': f'permissions_{action}', 'timeout': time.time() + 300}
+        text = f"Send user ID and {'commands' if action == 'commands' else 'duration (e.g., 1d)'}:"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='permissions_menu'),
+        types.InlineKeyboardButton("📋 List", callback_data='permissions_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_grant_input(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        user_id, role = message.text.split()
+        user_id = user_id.strip('@')
+        role = role.upper()
+        if role not in ['ADMIN', 'MOD']:
+            return bot.reply_to(message, translate('role_error', chat_id))
+        if safe_db_operation("INSERT OR REPLACE INTO permissions VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, user_id, role, json.dumps([]), '0')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('role_granted', chat_id, role=role, user_name=user_id, user_id=user_id))
+        else:
+            bot.reply_to(message, translate('role_error', chat_id))
+    except ValueError:
+        bot.reply_to(message, translate('role_error', chat_id))
+
+# CUSTOM COMMANDS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'customcmd_menu')
+def customcmd_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[2], callback_data='customcmd_create'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[3], callback_data='customcmd_list'),
+        types.InlineKeyboardButton(translate('customcmd_menu', chat_id).split('\n')[4], callback_data='customcmd_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('customcmd_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('customcmd_'))
+def customcmd_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'create':
+        bot.temp_data[chat_id] = {'action': 'customcmd_create', 'timeout': time.time() + 300}
+        text = "Send command and response (e.g., /hello|Hi there!):"
+    elif action == 'list':
+        cmds = safe_db_operation("SELECT trigger, response FROM custom_commands WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('customcmd_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• /{t}: {r}" for t, r in cmds) or "No custom commands."
+    elif action == 'edit':
+        bot.temp_data[chat_id] = {'action': 'customcmd_edit', 'timeout': time.time() + 300}
+        text = "Send command to edit (e.g., /hello):"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='customcmd_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='customcmd_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_customcmd_create(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        trigger, response = message.text.split('|', 1)
+        trigger = sanitize_input(trigger.strip('/ '))
+        response = sanitize_input(response.strip())
+        if len(trigger) > 50 or len(response) > 1000:
+            return bot.reply_to(message, translate('command_too_long', chat_id))
+        if safe_db_operation("SELECT 1 FROM custom_commands WHERE chat_id=? AND trigger=?", (chat_id, trigger), "fetch"):
+            return bot.reply_to(message, translate('command_exists', chat_id))
+        if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, trigger, response, 'all', json.dumps([]))):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('command_added', chat_id))
+        else:
+            bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
+    except ValueError:
+        bot.reply_to(message, translate('command_too_long', chat_id))
+
+# POLLS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'polls_menu')
+def polls_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[2], callback_data='poll_new'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[3], callback_data='poll_settings'),
+        types.InlineKeyboardButton(translate('polls_menu', chat_id).split('\n')[4], callback_data='poll_active'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('polls_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('poll_'))
+def poll_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'new':
+        bot.temp_data[chat_id] = {'action': 'poll_new', 'timeout': time.time() + 300}
+        text = "Send poll question and options (e.g., Question?|Option1,Option2|anonymous|timer):"
+    elif action == 'settings':
+        text = "⚙️ Poll settings: Not implemented yet."
+    elif action == 'active':
+        polls = safe_db_operation("SELECT poll_id, question FROM polls WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('polls_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {pid}: {q}" for pid, q in polls) or "No active polls."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='polls_menu'),
+        types.InlineKeyboardButton("📊 Active", callback_data='poll_active')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_poll_new(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        question, options, anon, timer = message.text.split('|')
+        options = options.split(',')
+        anon = 1 if anon.lower() == 'true' else 0
+        timer = parse_time(timer) if validate_time_format(timer) else 86400
+        poll_id = str(random.randint(1000, 9999))
+        if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                           (chat_id, poll_id, question, json.dumps(options), anon, timer, json.dumps({}))):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('poll_created', chat_id, poll_id=poll_id))
+        else:
+            bot.reply_to(message, translate('poll_invalid', chat_id))
+    except ValueError:
+        bot.reply_to(message, translate('poll_invalid', chat_id))
+
+# NOTES MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'notes_menu')
+def notes_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[2], callback_data='note_save'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[3], callback_data='note_search'),
+        types.InlineKeyboardButton(translate('notes_menu', chat_id).split('\n')[4], callback_data='note_share'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('notes_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('note_'))
+def note_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'save':
+        bot.temp_data[chat_id] = {'action': 'note_save', 'timeout': time.time() + 300}
+        text = "Send note tag and content (e.g., tag|content|expire):"
+    elif action == 'search':
+        notes = safe_db_operation("SELECT tag, content FROM notes WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('notes_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {t}: {c}" for t, c in notes) or "No notes."
+    elif action == 'share':
+        text = "📤 Note sharing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='notes_menu'),
+        types.InlineKeyboardButton("🔍 Search", callback_data='note_search')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_note_save(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        tag, content, expire = message.text.split('|')
+        if not validate_time_format(expire):
+            return bot.reply_to(message, translate('note_invalid_expire', chat_id))
+        if safe_db_operation("INSERT INTO notes VALUES (?, ?, ?, ?)", (chat_id, tag, content, expire)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('note_saved', chat_id))
+        else:
+            bot.reply_to(message, translate('note_saved', chat_id).replace("saved", "error saving"))
+    except ValueError:
+        bot.reply_to(message, translate('note_invalid_expire', chat_id))
+
+# RSS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'rss_menu')
+def rss_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[2], callback_data='rss_add'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[3], callback_data='rss_list'),
+        types.InlineKeyboardButton(translate('rss_menu', chat_id).split('\n')[4], callback_data='rss_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('rss_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('rss_'))
+def rss_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'add':
+        bot.temp_data[chat_id] = {'action': 'rss_add', 'timeout': time.time() + 300}
+        text = "Send RSS URL, keywords, interval (e.g., url|keywords|1h):"
+    elif action == 'list':
+        feeds = safe_db_operation("SELECT url, keywords FROM rss_feeds WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('rss_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {url}: {kw}" for url, kw in feeds) or "No RSS feeds."
+    elif action == 'edit':
+        text = "✏️ RSS editing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='rss_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='rss_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_rss_add(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        url, keywords, interval = message.text.split('|')
+        if not validate_url(url):
+            return bot.reply_to(message, translate('rss_invalid_url', chat_id))
+        if not validate_time_format(interval):
+            return bot.reply_to(message, translate('rss_invalid_interval', chat_id))
+        if safe_db_operation("INSERT INTO rss_feeds VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, url, keywords, interval, 'default')):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('rss_added', chat_id))
+        else:
+            bot.reply_to(message, translate('rss_added', chat_id).replace("added", "error adding"))
+    except ValueError:
+        bot.reply_to(message, translate('rss_invalid_url', chat_id))
+
+# SUBSCRIPTIONS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'subs_menu')
+def subs_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[2], callback_data='sub_grant'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[3], callback_data='sub_list'),
+        types.InlineKeyboardButton(translate('subs_menu', chat_id).split('\n')[4], callback_data='sub_edit'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('subs_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sub_'))
+def sub_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'grant':
+        bot.temp_data[chat_id] = {'action': 'sub_grant', 'timeout': time.time() + 300}
+        text = "Send user ID, plan, duration (e.g., @username|premium|1m):"
+    elif action == 'list':
+        subs = safe_db_operation("SELECT user_id, plan FROM subscriptions WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('subs_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {uid}: {plan}" for uid, plan in subs) or ",no subscriptions."
+    elif action == 'edit':
+        text = "✏️ Subscription editing: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='subs_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='sub_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_sub_grant(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        user_id, plan, duration = message.text.split('|')
+        if not validate_time_format(duration):
+            return bot.reply_to(message, translate('sub_invalid_duration', chat_id))
+        if safe_db_operation("INSERT INTO subscriptions VALUES (?, ?, ?, ?, 1)", 
+                           (chat_id, user_id.strip('@'), plan, duration)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('sub_granted', chat_id))
+        else:
+            bot.reply_to(message, translate('sub_granted', chat_id).replace("granted", "error granting"))
+    except ValueError:
+        bot.reply_to(message, translate('sub_invalid_duration', chat_id))
+
+# FEDERATION MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'fed_menu')
+def fed_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[2], callback_data='fed_link'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[3], callback_data='fed_list'),
+        types.InlineKeyboardButton(translate('fed_menu', chat_id).split('\n')[4], callback_data='fed_sync'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('fed_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('fed_'))
+def fed_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'link':
+        bot.temp_data[chat_id] = {'action': 'fed_link', 'timeout': time.time() + 300}
+        text = "Send group ID to link:"
+    elif action == 'list':
+        feds = safe_db_operation("SELECT linked_group, sync_actions FROM federations WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('fed_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {gid}: {sa}" for gid, sa in feds) or "No linked groups."
+    elif action == 'sync':
+        text = "⚙️ Federation sync: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='fed_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='fed_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_fed_link(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    linked_group = message.text.strip()
+    if safe_db_operation("INSERT INTO federations VALUES (?, ?, ?, 0)", 
+                       (chat_id, linked_group, json.dumps(['ban', 'mute']))):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('fed_linked', chat_id))
+    else:
+        bot.reply_to(message, translate('fed_error', chat_id))
+
+# CAPTCHA MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'captcha_menu')
+def captcha_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[2], callback_data='captcha_type'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[3], callback_data='captcha_difficulty'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[4], callback_data='captcha_time'),
+        types.InlineKeyboardButton(translate('captcha_menu', chat_id).split('\n')[5], callback_data='captcha_action'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('captcha_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('captcha_'))
+def captcha_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    bot.temp_data[chat_id] = {'action': 'captcha_set', 'sub_action': action, 'timeout': time.time() + 300}
+    if action == 'type':
+        text = "Send CAPTCHA type (math/text/image):"
+    elif action == 'difficulty':
+        text = "Send difficulty (easy/medium/hard):"
+    elif action == 'time':
+        text = "Send time limit (e.g., 5m):"
+    elif action == 'action':
+        text = "Send fail action (kick/mute):"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='captcha_menu')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_captcha_set(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    sub_action = bot.temp_data[chat_id]['sub_action']
+    value = message.text.lower()
+    
+    if sub_action == 'type' and value not in ['math', 'text', 'image']:
+        return bot.reply_to(message, translate('captcha_error', chat_id))
+    if sub_action == 'difficulty' and value not in ['easy', 'medium', 'hard']:
+        return bot.reply_to(message, translate('captcha_invalid_difficulty', chat_id))
+    if sub_action == 'time' and not validate_time_format(value):
+        return bot.reply_to(message, translate('captcha_invalid_time', chat_id))
+    if sub_action == 'action' and value not in ['kick', 'mute']:
+        return bot.reply_to(message, translate('captcha_invalid_action', chat_id))
+    
+    if safe_db_operation("INSERT OR REPLACE INTO captchas VALUES (?, ?, ?, ?, ?)", 
+                       (chat_id, value if sub_action == 'type' else 'math', 
+                        value if sub_action == 'difficulty' else 'easy', 
+                        parse_time(value) if sub_action == 'time' else 300, 
+                        value if sub_action == 'action' else 'kick')):
+        del bot.temp_data[chat_id]
+        bot.reply_to(message, translate('captcha_saved', chat_id))
+    else:
+        bot.reply_to(message, translate('captcha_error', chat_id))
+
+# MESSAGE DUMP MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'dump_menu')
+def dump_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[2], callback_data='dump_enable'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[3], callback_data='dump_channel'),
+        types.InlineKeyboardButton(translate('dump_menu', chat_id).split('\n')[4], callback_data='dump_view'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('dump_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('dump_'))
+def dump_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'enable':
+        bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'enable', 'timeout': time.time() + 300}
+        text = "Send 'on' or 'off' to enable/disable message dump:"
+    elif action == 'channel':
+        bot.temp_data[chat_id] = {'action': 'dump_set', 'sub_action': 'channel', 'timeout': time.time() + 300}
+        text = "Send channel ID for message dump:"
+    elif action == 'view':
+        dumps = safe_db_operation("SELECT deleted_msg, user_id, timestamp FROM message_dump WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('dump_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {t}: {m} ({u})" for m, u, t in dumps) or "No dumped messages."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='dump_menu'),
+        types.InlineKeyboardButton("📝 View", callback_data='dump_view')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_dump_set(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    sub_action = bot.temp_data[chat_id]['sub_action']
+    value = message.text.lower()
+    
+    if sub_action == 'enable' and value not in ['on', 'off']:
+        return bot.reply_to(message, translate('invalid_input', chat_id))
+    if sub_action == 'channel':
         try:
-            bot.polling(none_stop=True, interval=0, timeout=20)
-        except Exception as e:
-            logging.error(f"polling error: {e}")
-            time.sleep(3)
+            int(value)
+        except ValueError:
+            return bot.reply_to(message, translate('dump_invalid_channel', chat_id))
+    
+    if sub_action == 'enable':
+        if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, 'message_dump', 'status', ?)", 
+                           (chat_id, json.dumps({'status': value}))):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('dump_enabled', chat_id, status='enabled' if value == 'on' else 'disabled'))
+        else:
+            bot.reply_to(message, translate('dump_error', chat_id))
+    elif sub_action == 'channel':
+        if safe_db_operation("INSERT OR REPLACE INTO message_dump VALUES (?, ?, ?, ?, ?)", 
+                           (chat_id, '', '', '', value)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('dump_channel_set', chat_id))
+        else:
+            bot.reply_to(message, translate('dump_error', chat_id))
+
+# PLUGINS MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'plugins_menu')
+def plugins_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[2], callback_data='plugin_install'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[3], callback_data='plugin_list'),
+        types.InlineKeyboardButton(translate('plugins_menu', chat_id).split('\n')[4], callback_data='plugin_config'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='group_menu')
+    )
+    
+    bot.edit_message_text(translate('plugins_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('plugin_'))
+def plugin_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    if action == 'install':
+        bot.temp_data[chat_id] = {'action': 'plugin_install', 'timeout': time.time() + 300}
+        text = "Send plugin name and config (e.g., plugin_name|config):"
+    elif action == 'list':
+        plugins = safe_db_operation("SELECT plugin_name, config FROM plugins WHERE chat_id=?", (chat_id,), "fetch")
+        text = translate('plugins_menu', chat_id).split('\n')[0] + ":\n" + "\n".join(f"• {p}: {c}" for p, c in plugins) or "No plugins installed."
+    elif action == 'config':
+        text = "⚙️ Plugin config: Not implemented yet."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='plugins_menu'),
+        types.InlineKeyboardButton("📝 List", callback_data='plugin_list')
+    )
+    bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+
+def handle_plugin_install(message):
+    chat_id = str(message.chat.id)
+    if chat_id not in bot.temp_data: return
+    try:
+        plugin_name, config = message.text.split('|')
+        if safe_db_operation("INSERT INTO plugins VALUES (?, ?, ?, 1)", 
+                           (chat_id, plugin_name, config)):
+            del bot.temp_data[chat_id]
+            bot.reply_to(message, translate('plugin_installed', chat_id))
+        else:
+            bot.reply_to(message, translate('plugin_error', chat_id))
+    except ValueError:
+        bot.reply_to(message, translate('plugin_error', chat_id))
+
+# MODERATION LOCK MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'moderation_lock')
+def moderation_lock_menu(call):
+    chat_id = str(call.message.chat.id)
+    settings = get_all_settings(chat_id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        ("🔗 Links", 'lock_links', safe_json(settings.get('moderation_lock_links', '{}'))['status']),
+        ("📸 Media", 'lock_media', safe_json(settings.get('moderation_lock_media', '{}'))['status']),
+        ("😀 Stickers", 'lock_stickers', safe_json(settings.get('moderation_lock_stickers', '{}'))['status']),
+        ("📤 Forwards", 'lock_forwards', safe_json(settings.get('moderation_lock_forwards', '{}'))['status']),
+        ("⬅️ Back", 'group_menu', '')
+    ]
+    markup.add(*[types.InlineKeyboardButton(f"{text} {'✅' if status == 'on' else '❌'}", callback_data=data) for text, data, status in buttons])
+    
+    bot.edit_message_text(translate('moderation_lock_menu', chat_id, 
+                                    links_status=safe_json(settings.get('moderation_lock_links', '{}'))['status'],
+                                    media_status=safe_json(settings.get('moderation_lock_media', '{}'))['status'],
+                                    stickers_status=safe_json(settings.get('moderation_lock_stickers', '{}'))['status'],
+                                    forwards_status=safe_json(settings.get('moderation_lock_forwards', '{}'))['status']),
+                         chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lock_'))
+def lock_action(call):
+    action = call.data.split('_')[1]
+    chat_id = str(call.message.chat.id)
+    
+    bot.temp_data[chat_id] = {'action': f'lock_{action}', 'timeout': time.time() + 300}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("✅ On", callback_data=f'lock_{action}_on'),
+        types.InlineKeyboardButton("❌ Off", callback_data=f'lock_{action}_off'),
+        types.InlineKeyboardButton("⬅️ Back", callback_data='moderation_lock')
+    )
+    bot.edit_message_text(f"Set {action} lock (on/off):", chat_id, call.message.message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lock_') and call.data.endswith(('_on', '_off')))
+def lock_set(call):
+    parts = call.data.split('_')
+    action, status = parts[1], parts[2]
+    chat_id = str(call.message.chat.id)
+    
+    if safe_db_operation("INSERT OR REPLACE INTO settings VALUES (?, ?, ?, ?)", 
+                       (chat_id, 'moderation', f'lock_{action}', json.dumps({'status': status}))):
+        bot.edit_message_text(translate('lock_set', chat_id, action=action.capitalize(), status=status), 
+                             chat_id, call.message.message_id)
+    else:
+        bot.edit_message_text(translate('lock_error', chat_id, action=action.capitalize()), 
+                             chat_id, call.message.message_id)
+
+# COMMANDS LIST
+@bot.callback_query_handler(func=lambda call: call.data == 'show_commands')
+def show_commands(call):
+    chat_id = str(call.message.chat.id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("⬅️ Back", callback_data='main'),
+        types.InlineKeyboardButton("ℹ️ Help", callback_data='help')
+    )
+    bot.edit_message_text(translate('commands_list', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+# ADVANCED MENU
+@bot.callback_query_handler(func=lambda call: call.data == 'advanced_menu')
+def advanced_menu(call):
+    chat_id = str(call.message.chat.id)
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        (translate('permissions_menu', chat_id).split('\n')[0], 'permissions_menu'),
+        (translate('customcmd_menu', chat_id).split('\n')[0], 'customcmd_menu'),
+        (translate('polls_menu', chat_id).split('\n')[0], 'polls_menu'),
+        (translate('notes_menu', chat_id).split('\n')[0], 'notes_menu'),
+        (translate('rss_menu', chat_id).split('\n')[0], 'rss_menu'),
+        (translate('subs_menu', chat_id).split('\n')[0], 'subs_menu'),
+        (translate('fed_menu', chat_id).split('\n')[0], 'fed_menu'),
+        (translate('captcha_menu', chat_id).split('\n')[0], 'captcha_menu'),
+        (translate('dump_menu', chat_id).split('\n')[0], 'dump_menu'),
+        (translate('plugins_menu', chat_id).split('\n')[0], 'plugins_menu'),
+        ("⬅️ Back", 'group_menu')
+    ]
+    markup.add(*[types.InlineKeyboardButton(text, callback_data=data) for text, data in buttons])
+    
+    bot.edit_message_text(translate('advanced_menu', chat_id), chat_id, call.message.message_id, reply_markup=markup)
+
+# MODERATION COMMANDS
+@bot.message_handler(commands=['warn', 'unwarn', 'ban', 'unban', 'mute', 'unmute'])
+def moderation_commands(message):
+    chat_id = str(message.chat.id)
+    if not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, translate('admin_only', chat_id))
+    
+    cmd = message.text.split()[0][1:].lower()
+    try:
+        user_id = message.text.split()[1].strip('@')
+        reason = ' '.join(message.text.split()[2:]) or 'No reason'
+        if cmd == 'mute':
+            duration = parse_time(message.text.split()[2]) if len(message.text.split()) > 2 else 3600
+            reason = ' '.join(message.text.split()[3:]) or 'No reason'
+        
+        actions = {
+            'warn': lambda: safe_db_operation("INSERT INTO warns VALUES (?, ?, ?, ?, ?)", 
+                                            (chat_id, user_id, 1, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unwarn': lambda: safe_db_operation("DELETE FROM warns WHERE chat_id=? AND user_id=?", (chat_id, user_id)),
+            'ban': lambda: bot.kick_chat_member(chat_id, user_id) and safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                                                                      (chat_id, 'ban', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unban': lambda: bot.unban_chat_member(chat_id, user_id) and safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                                                                        (chat_id, 'unban', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'mute': lambda: bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': False}, until_date=int(time.time()) + duration) and 
+                    safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                     (chat_id, 'mute', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+            'unmute': lambda: bot.restrict_chat_member(chat_id, user_id, permissions={'can_send_messages': True}) and 
+                      safe_db_operation("INSERT INTO logs VALUES (?, ?, ?, ?, ?)", 
+                                       (chat_id, 'unmute', user_id, reason, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        }
+        
+        if actions[cmd]():
+            bot.reply_to(message, f"✅ {cmd.capitalize()} applied to {user_id}: {reason}")
+        else:
+            bot.reply_to(message, f"❌ Error applying {cmd} to {user_id}")
+    except IndexError:
+        bot.reply_to(message, f"❌ Usage: /{cmd} @username [reason]")
+
+# SETTINGS COMMAND
+@bot.message_handler(commands=['settings'])
+def settings_command(message):
+    chat_id = str(message.chat.id)
+    if message.chat.type == 'private' or not is_creator_or_admin(bot, chat_id, message.from_user.id):
+        return bot.reply_to(message, translate('admin_only', chat_id))
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(translate('main_menu', chat_id).split('\n')[0], callback_data='main'),
+        types.InlineKeyboardButton(translate('commands_list', chat_id).split('\n')[0], callback_data='show_commands')
+    )
+    bot.reply_to(message, translate('main_menu', chat_id), reply_markup=markup)
+
+# MAIN LOOP
+if __name__ == "__main__":
+    logging.info("Starting bot with polling...")
+    try:
+        bot.polling(none_stop=True, interval=0)  # Choreo के लिए पोलिंग
+    except Exception as e:
+        logging.error(f"Polling error: {e}")
+        time.sleep(10)
+        bot.polling(none_stop=True, interval=0)
