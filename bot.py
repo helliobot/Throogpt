@@ -1345,7 +1345,7 @@ def cb_poll_vote(call):
     row = polls_get(chat_id, pid)
     if not row: return
     if not row['open']:
-        send_menu(chat_id, "Poll बंद है.", polls_render_kb(pid, jload(row['options_json'], {})['opts']')); return
+        send_menu(chat_id, "Poll बंद है.", polls_render_kb(pid, jload(row['options_json'], {})['opts'])); return
     data = jload(row['options_json'], {'opts': [], 'votes': {}})
     if idx < 0 or idx >= len(data['opts']): return
     votes = data.get('votes', {})
