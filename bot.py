@@ -1303,17 +1303,21 @@ def handle_customcmd_create(message):
             sent_message = bot.reply_to(message, translate('command_exists', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", 
-                           (chat_id, trigger, response, 'all', json.dumps([]))):
-            del bot.temp_data[chat_id]
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('command_added', chat_id))
-            bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
-        else:
-            delete_previous_reply(chat_id)
-            sent_message = bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
-            bot.temp_data[f"last_reply_{chat_id}"] =
-            sent_message.message_id
+        if safe_db_operation("SELECT 1 FROM custom_commands WHERE chat_id=? AND trigger=?", (chat_id, trigger), "fetch"):
+    delete_previous_reply(chat_id)
+    sent_message = bot.reply_to(message, translate('command_exists', chat_id))
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+    return
+if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", 
+                    (chat_id, trigger, response, 'all', json.dumps([]))):
+    del bot.temp_data[chat_id]
+    delete_previous_reply(chat_id)
+    sent_message = bot.reply_to(message, translate('command_added', chat_id))
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+else:
+    delete_previous_reply(chat_id)
+    sent_message = bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
+    bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
 
 def handle_poll_new(message):
     chat_id = str(message.chat.id)
