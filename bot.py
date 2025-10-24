@@ -213,7 +213,7 @@ def send_menu(chat_id, text, markup=None, tag=None, skip_cleanup=False, mark_sta
         prev = last_reply_id.get(str(chat_id))
         if prev and prev != m.message_id and (chat_id, prev) not in START_MESSAGE_IDS:
             try:
-                bot.delete_message(chat_id, prev)
+                
             except Exception:
                 pass
     last_reply_id[str(chat_id)] = m.message_id
