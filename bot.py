@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-# Advanced Telegram Group Manager Bot — single-file, no extra libs, Choreo-safe
-# Buttons-first UX. Cleanup policy: naya message send hone ke baad hi pichla delete.
+# Advanced Telegram Group Manager Bot — single-file, updated with enhanced features (welcome, captcha, locks, xp, logs, triggers editing, auto-clean)
+# Buttons-first UX. Cleanup policy preserved: naya message send hone ke baad hi pichla delete.
 
-import os, sqlite3, json, time, re, random, logging, html
+import os, sqlite3, json, time, re, random, logging, html, threading
 from datetime import datetime, timedelta
 from threading import Lock, Thread
 from collections import defaultdict
@@ -35,6 +35,15 @@ START_MESSAGE_IDS = set()          # /start messages protected from cleanup
 STATE = {}                         # transient per-chat states
 LOCK = Lock()
 DEBUG_CHATS = set()
+
+# New: pending captcha verifications: {(chat_id,user_id): {ans, msg_id, created_at}}
+pending_captcha = {}
+# New: xp cache updated in db
+XP_LOCK = Lock()
+
+# messages scheduled for auto-clean: list of (chat_id, message_id, delete_at)
+AUTO_CLEAN_QUEUE = []
+AUTO_CLEAN_LOCK = Lock()
 
 # ---------- Utilities ----------
 def now_ts():
@@ -173,6 +182,16 @@ def init_db():
         created_at INTEGER
     )""")
 
+    # XP table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS xp (
+        chat_id TEXT,
+        user_id TEXT,
+        points INTEGER DEFAULT 0,
+        last_at INTEGER,
+        PRIMARY KEY (chat_id, user_id)
+    )""")
+
     conn.commit(); conn.close()
 
 init_db()
@@ -199,12 +218,21 @@ def set_setting(chat_id, key, value):
     c.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (value, str(chat_id)))
     conn.commit(); conn.close()
 
+# helper to store structured menu settings inside menu_json
+def menu_get(chat_id):
+    row = get_settings(str(chat_id))
+    return jload(row['menu_json'], {}) or {}
+
+def menu_set(chat_id, obj):
+    set_setting(str(chat_id), 'menu_json', jdump(obj))
+
 # ---------- Cleanup-safe send ----------
-def send_menu(chat_id, text, markup=None, tag=None, skip_cleanup=False, mark_start=False):
+def send_menu(chat_id, text, markup=None, tag=None, skip_cleanup=False, mark_start=False, auto_clean_seconds=None):
     """
     Policy: pehle send, fir purana delete (agar hai).
     skip_cleanup=True ho to purana mat delete.
     mark_start=True: is message ko /start protection milegi (auto-delete kabhi nahi).
+    auto_clean_seconds: if provided, schedule this bot message for deletion after that many seconds.
     """
     m = bot.send_message(chat_id, text, reply_markup=markup)
     if mark_start:
@@ -213,12 +241,18 @@ def send_menu(chat_id, text, markup=None, tag=None, skip_cleanup=False, mark_sta
         prev = last_reply_id.get(str(chat_id))
         if prev and prev != m.message_id and (chat_id, prev) not in START_MESSAGE_IDS:
             try:
-                
+                bot.delete_message(chat_id, prev)
             except Exception:
                 pass
     last_reply_id[str(chat_id)] = m.message_id
     if tag:
         MENU_CACHE[(str(chat_id), tag)] = m.message_id
+
+    # schedule auto-clean of this bot message if requested
+    if auto_clean_seconds:
+        with AUTO_CLEAN_LOCK:
+            AUTO_CLEAN_QUEUE.append((chat_id, m.message_id, now_ts() + int(auto_clean_seconds)))
+
     return m
 
 # ---------- Languages ----------
@@ -284,7 +318,10 @@ BTN = {
         'lang': "🌐 Lang",
         'advanced': "⚙️ Advanced",
         'group': "👥 Group",
-        'back': "⬅️ Back"
+        'back': "⬅️ Back",
+        'locks': "🔒 Locks",
+        'xp': "🏆 XP/Leaderboard",
+        'logs': "🗂️ Mod Logs"
     },
     'hi': {
         'verify': "🛡️ वेरिफ़ाई",
@@ -296,7 +333,10 @@ BTN = {
         'lang': "🌐 भाषा",
         'advanced': "⚙️ एडवांस्ड",
         'group': "👥 ग्रुप",
-        'back': "⬅️ पीछे"
+        'back': "⬅️ पीछे",
+        'locks': "🔒 लॉक",
+        'xp': "🏆 XP/लिडरबोर्ड",
+        'logs': "🗂️ मॉड लॉग"
     }
 }
 
@@ -304,6 +344,7 @@ def bt(chat_id, key):
     row = get_settings(str(chat_id))
     lang = (row['lang'] if row and row['lang'] else 'hi')
     return BTN.get(lang, BTN['hi']).get(key, key)
+
 # ---------- Keyboards ----------
 def kb(rows):
     markup = types.InlineKeyboardMarkup()
@@ -317,10 +358,10 @@ def main_menu_kb(chat_id):
         [(bt(chat_id,'triggers'),"triggers"), (bt(chat_id,'schedule'),"schedule")],
         [(bt(chat_id,'clean'),"clean"), (bt(chat_id,'block'),"block")],
         [(bt(chat_id,'lang'),"lang"), (bt(chat_id,'advanced'),"advanced")],
-        [(bt(chat_id,'group'))]
+        [(bt(chat_id,'group'),"group")]
     ])
-    
-    # ---------- Analytics ----------
+
+# ---------- Analytics ----------
 def track(chat_id, user_id, action):
     try:
         conn = db(); c = conn.cursor()
@@ -338,40 +379,62 @@ def stats_report(chat_id, days=7):
     rows = c.fetchall(); conn.close()
     lines = [f"{r['action']}: {r['c']}" for r in rows] or ["(no data)"]
     return "\n".join(lines)
-    
-    # ---------- Welcome Template ----------
+
+# ---------- Welcome Template ----------
 def welcome_tpl_get(chat_id):
-    row = get_settings(str(chat_id))
-    menu = jload(row['menu_json'], {}) or {}
+    menu = menu_get(chat_id)
     return menu.get('welcome_tpl', "👋 Welcome, {name}!")
 
 def welcome_tpl_set(chat_id, text):
-    row = get_settings(str(chat_id))
-    menu = jload(row['menu_json'], {}) or {}
+    menu = menu_get(chat_id)
     menu['welcome_tpl'] = text
-    set_setting(str(chat_id), 'menu_json', jdump(menu))
+    menu_set(chat_id, menu)
 
 # ---------- Member updates (welcome/leave) ----------
+# enhanced: auto-captcha option, auto-clean scheduling, welcome with optional photo
 @bot.chat_member_handler()
 def on_member(event):
     chat_id = event.chat.id
     row = get_settings(str(chat_id))
     new = event.new_chat_member
     left = event.left_chat_member
+    menu = menu_get(chat_id)
+    auto_captcha = menu.get('auto_captcha', False)
+    auto_clean_seconds = menu.get('auto_clean_seconds', 0)  # 0 means off
     if new and row['welcome_enabled']:
         try:
             tpl = welcome_tpl_get(chat_id)
             name = safe_html(new.user.first_name or "User")
             msg = tpl.format(name=name, id=new.user.id)
-            bot.send_message(chat_id, msg)
-            track(chat_id, new.user.id, "welcome")
+            # If auto captcha enabled -> send a captcha challenge targeted to the user
+            if auto_captcha:
+                # create captcha and send via send_menu with buttons to verify
+                q, ans = captcha_new()
+                key = (chat_id, new.user.id)
+                sent = send_menu(chat_id, f"{safe_html(new.user.first_name or 'User')}, verify to access: {q}",
+                                 kb([[("Verify ✅", f"CAP_AUTO_{chat_id}_{new.user.id}")]]),
+                                 skip_cleanup=False, mark_start=False,
+                                 auto_clean_seconds=menu.get('welcome_auto_clean', None))
+                pending_captcha[key] = {'ans': ans, 'msg_id': sent.message_id, 'created_at': now_ts(), 'user_name': new.user.first_name}
+                # schedule potential kick later by background thread
+                track(chat_id, new.user.id, "welcome_captcha_sent")
+            else:
+                sent = bot.send_message(chat_id, msg)
+                track(chat_id, new.user.id, "welcome")
+                # if auto-clean configured for welcome messages, schedule deletion
+                if auto_clean_seconds:
+                    with AUTO_CLEAN_LOCK:
+                        AUTO_CLEAN_QUEUE.append((chat_id, sent.message_id, now_ts() + int(auto_clean_seconds)))
         except Exception as e:
             logging.warning(f"welcome error: {e}")
     if left and row['leave_enabled']:
         try:
             name = safe_html(left.first_name or "User")
-            bot.send_message(chat_id, f"👋 {name} left.")
+            sent = bot.send_message(chat_id, f"👋 {name} left.")
             track(chat_id, left.id, "leave")
+            if menu.get('auto_clean_leave', 0):
+                with AUTO_CLEAN_LOCK:
+                    AUTO_CLEAN_QUEUE.append((chat_id, sent.message_id, now_ts() + int(menu.get('auto_clean_leave', 0))))
         except Exception as e:
             logging.warning(f"leave error: {e}")
 
@@ -423,9 +486,14 @@ def match_trigger(chat_id, text):
 def cmd_start(m):
     chat_id = m.chat.id
     markup = main_menu_kb(chat_id)
-    sent = bot.send_message(chat_id, tr(chat_id, 'start'), reply_markup=markup)
-    START_MESSAGE_IDS.add((chat_id, sent.message_id))  # protect start message
-    last_reply_id[str(chat_id)] = sent.message_id
+    # Use send_menu with skip_cleanup and mark_start protection
+    send_menu(
+        chat_id,
+        tr(chat_id, 'start'),
+        markup,
+        skip_cleanup=True,
+        mark_start=True
+    )
     track(chat_id, m.from_user.id, "start")
 
 @bot.message_handler(commands=['menu'])
@@ -448,13 +516,13 @@ def show_main(chat_id):
     send_menu(chat_id, tr(chat_id, 'main'), main_menu_kb(chat_id), tag='main')
 
 def group_menu(chat_id):
-    markup = kb([
+    menu_k = kb([
         [("🔒 Locks", "g_locks"), ("👤 Roles", "g_roles")],
         [("📈 Analytics", "g_stats"), ("🧪 Captcha", "g_captcha")],
-        [("🧰 Tools", "g_tools"), ("🧾 Dumps", "g_dumps")],
+        [("🧰 Tools", "g_tools"), ("🗂️ Logs", "g_logs")],
         [(tr(chat_id, 'back'), "back_main")]
     ])
-    send_menu(chat_id, tr(chat_id, 'group'), markup, tag='group')
+    send_menu(chat_id, tr(chat_id, 'group'), menu_k, tag='group')
 
 # ---------- Callback routing ----------
 @bot.callback_query_handler(func=lambda c: True)
@@ -472,6 +540,7 @@ def cb(call):
         send_menu(chat_id, text, kb_back(chat_id, 'group')); return
 
     if data == 'welcome':
+        # toggle welcome
         row = get_settings(str(chat_id))
         new = 0 if row['welcome_enabled'] else 1
         set_setting(str(chat_id), 'welcome_enabled', new)
@@ -481,6 +550,7 @@ def cb(call):
         send_menu(chat_id, "Verification tools ready.", kb_back(chat_id, 'back_main')); return
 
     if data == 'triggers':
+        # open triggers menu
         send_menu(chat_id, "Triggers menu.", kb([
             [("Add", "TR_ADD"), ("List", "TR_LIST")],
             [("Test regex", "TR_TEST")],
@@ -494,10 +564,12 @@ def cb(call):
         ])); return
 
     if data == 'clean':
-        send_menu(chat_id, "Clean rules.", kb([
-            [("Flood", "CL_FLOOD"), ("Blacklist", "CL_BL")],
-            [(tr(chat_id, 'back'), 'back_main')]
-        ])); return
+        # open clean menu with auto-clean controls
+        menu = menu_get(chat_id)
+        seconds = menu.get('auto_clean_seconds', 0)
+        send_menu(chat_id, f"Clean rules.\nAuto-clean: {seconds or '(off)'} sec",
+                  kb([[("Toggle Auto-Clean 30s", "CLEAN_AUTO_30"), ("Toggle Auto-Clean Off", "CLEAN_AUTO_OFF")],
+                      [(tr(chat_id, 'back'), 'back_main')]])); return
 
     if data == 'block':
         send_menu(chat_id, "Blacklist menu.", kb([
@@ -510,10 +582,26 @@ def cb(call):
                   "Advanced: Roles, Locks, RSS, Dumps, Federation, Subs, Polls.",
                   kb([
                       [("Subs", "SUBS"), ("Plugins", "PLUG")],
-                      [("Polls", "PL_MENU")],
+                      [("Polls", "PL_MENU"), (bt(chat_id,'xp'), "XP_MENU")],
                       [(tr(chat_id, 'back'), 'back_main')]
                   ])); return
 
+    if data == 'XP_MENU':
+        # XP controls
+        menu = menu_get(chat_id)
+        enabled = menu.get('xp_enabled', False)
+        send_menu(chat_id, f"XP system: {'ON' if enabled else 'OFF'}",
+                  kb([[("Toggle XP", "XP_TOGGLE"), ("Top 10", "XP_TOP")],
+                      [(tr(chat_id, 'back'), 'advanced')]])); return
+
+    if data == 'g_logs' or data == 'g_logs_more':
+        # logs menu
+        menu = menu_get(chat_id)
+        target = menu.get('mod_log_target', '(none)')
+        send_menu(chat_id, f"Mod logs -> {target}", kb([[("Set target", "LOG_SET"), ("Toggle logs", "LOG_TOG")], [(tr(chat_id, 'back'), 'group')]]))
+        return
+
+    # Locks & group advanced
     advanced_route(chat_id, data)
 
 # ---------- Advanced route ----------
@@ -531,7 +619,8 @@ def advanced_route(chat_id, key):
     if key == 'g_locks':
         locks = jdump(get_locks(chat_id))
         send_menu(chat_id, f"Locks: {locks}",
-                  kb([[("Links on", "LOCK_links_on"), ("Links off", "LOCK_links_off")],
+                  kb([[("URLs", "LOCK_urls_toggle"), ("Forwards", "LOCK_forwards_toggle")],
+                      [("Photos", "LOCK_photos_toggle"), ("Stickers", "LOCK_stickers_toggle")],
                       [(tr(chat_id, 'back'), 'group')]])); return
 
     if key == 'g_roles':
@@ -539,8 +628,10 @@ def advanced_route(chat_id, key):
         send_menu(chat_id, f"Roles: {roles}", kb_back(chat_id, 'group')); return
 
     if key == 'g_captcha':
-        send_menu(chat_id, "Captcha: use the button to generate.",
-                  kb([[("Generate", "CAP_GEN")], [(tr(chat_id, 'back'), 'group')]])); return
+        menu = menu_get(chat_id)
+        enabled = menu.get('auto_captcha', False)
+        send_menu(chat_id, f"Captcha auto-verify on join: {'ON' if enabled else 'OFF'}",
+                  kb([[("Toggle Captcha", "CAP_TOG")], [(tr(chat_id, 'back'), 'group')]])); return
 
     if key == 'g_dumps':
         send_menu(chat_id, "Dumps: toggle and set forward target.",
@@ -551,8 +642,55 @@ def advanced_route(chat_id, key):
         send_menu(chat_id, "Polls:",
                   kb([[("➕ New", "PL_NEW"), ("📋 List", "PL_LIST")],
                       [(tr(chat_id, 'back'), 'advanced')]])); return
-                      
-                      # ---------- Roles & Locks ----------
+
+    if key == 'XP_TOGGLE':
+        menu = menu_get(chat_id)
+        menu['xp_enabled'] = not menu.get('xp_enabled', False)
+        menu_set(chat_id, menu)
+        send_menu(chat_id, "XP toggled.", kb_back(chat_id, 'advanced')); return
+
+    if key == 'XP_TOP':
+        # compute top 10 from xp table
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC LIMIT 10", (str(chat_id),))
+        rows = c.fetchall(); conn.close()
+        if rows:
+            text = "Top XP:\n" + "\n".join(f"{i+1}. {r['user_id']} — {r['points']}" for i, r in enumerate(rows))
+        else:
+            text = "No XP yet."
+        send_menu(chat_id, text, kb_back(chat_id, 'advanced')); return
+
+    if key == 'CAP_TOG':
+        menu = menu_get(chat_id)
+        menu['auto_captcha'] = not menu.get('auto_captcha', False)
+        menu_set(chat_id, menu)
+        send_menu(chat_id, f"Auto-captcha: {'ON' if menu['auto_captcha'] else 'OFF'}", kb_back(chat_id, 'group')); return
+
+    if key == 'LOCK_urls_toggle':
+        locks = get_locks(chat_id)
+        locks['urls'] = 0 if locks.get('urls') else 1
+        set_locks(chat_id, locks)
+        send_menu(chat_id, f"Lock urls: {'on' if locks['urls'] else 'off'}", kb_back(chat_id, 'group')); return
+
+    if key == 'LOCK_forwards_toggle':
+        locks = get_locks(chat_id)
+        locks['forwards'] = 0 if locks.get('forwards') else 1
+        set_locks(chat_id, locks)
+        send_menu(chat_id, f"Lock forwards: {'on' if locks['forwards'] else 'off'}", kb_back(chat_id, 'group')); return
+
+    if key == 'LOCK_photos_toggle':
+        locks = get_locks(chat_id)
+        locks['photos'] = 0 if locks.get('photos') else 1
+        set_locks(chat_id, locks)
+        send_menu(chat_id, f"Lock photos: {'on' if locks['photos'] else 'off'}", kb_back(chat_id, 'group')); return
+
+    if key == 'LOCK_stickers_toggle':
+        locks = get_locks(chat_id)
+        locks['stickers'] = 0 if locks.get('stickers') else 1
+        set_locks(chat_id, locks)
+        send_menu(chat_id, f"Lock stickers: {'on' if locks['stickers'] else 'off'}", kb_back(chat_id, 'group')); return
+
+# ---------- Roles & Locks ----------
 def get_roles(chat_id):
     row = get_settings(str(chat_id))
     return jload(row['roles_json'], {}) or {}
@@ -571,6 +709,7 @@ def set_locks(chat_id, locks):
 def cb_lock(call):
     chat_id = call.message.chat.id
     try:
+        # data format: LOCK_<feature>_<onoff> OR handled earlier
         _, feature, onoff = call.data.split("_", 3)
     except Exception:
         return
@@ -582,12 +721,32 @@ def cb_lock(call):
               kb([[("Links on", "LOCK_links_on"), ("Links off", "LOCK_links_off")],
                   [(tr(chat_id, 'back'), 'group')]]))
 
-# ---------- Captcha ----------
-pending_captcha = {}
-
+# ---------- Captcha helpers ----------
 def captcha_new():
     a, b = random.randint(3, 12), random.randint(3, 12)
     return f"{a}+{b}=?", a + b
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("CAP_AUTO_"))
+def cb_cap_auto(call):
+    # Format: CAP_AUTO_<chat_id>_<user_id>
+    try:
+        _, _, chat_s, user_s = call.data.split("_", 3)
+        chat_id = int(chat_s); user_id = int(user_s)
+    except Exception:
+        return
+    key = (chat_id, user_id)
+    if key in pending_captcha and call.from_user.id == user_id:
+        # verified
+        pending_captcha.pop(key, None)
+        send_menu(chat_id, f"Verified ✅ {call.from_user.first_name}", kb_back(chat_id, 'group'))
+        track(chat_id, user_id, "captcha_pass")
+    else:
+        send_menu(chat_id, "No pending captcha or wrong user.", kb_back(chat_id, 'group'))
+
+@bot.callback_query_handler(func=lambda c: c.data == "CAP_TOG")
+def cb_cap_toggle(call):
+    chat_id = call.message.chat.id
+    advanced_route(chat_id, 'CAP_TOG')
 
 @bot.callback_query_handler(func=lambda c: c.data == "CAP_GEN")
 def cb_cap_gen(call):
@@ -632,7 +791,7 @@ def bl_add_text(m):
     STATE.pop((chat_id, "await_bl"), None)
     bot.reply_to(m, "Added to blacklist.")
 
-# ---------- Triggers UI ----------
+# ---------- Triggers UI (enhanced: edit/delete) ----------
 @bot.callback_query_handler(func=lambda c: c.data in ("TR_ADD", "TR_LIST", "TR_TEST"))
 def cb_triggers(call):
     chat_id = call.message.chat.id
@@ -641,17 +800,40 @@ def cb_triggers(call):
         send_menu(chat_id, "Trigger keyword ya /regex:<pattern> bhejo.", kb_back(chat_id, 'triggers'))
     elif call.data == "TR_LIST":
         conn = db(); c = conn.cursor()
-        c.execute("SELECT pattern, is_regex FROM triggers WHERE chat_id=?", (str(chat_id),))
+        c.execute("SELECT id, pattern, is_regex FROM triggers WHERE chat_id=?", (str(chat_id),))
         rows = c.fetchall(); conn.close()
         if rows:
-            text = "Triggers:\n" + "\n".join(
-                f"- {'/regex:' if r['is_regex'] else ''}{r['pattern']}" for r in rows)
+            # present each trigger with edit/delete buttons
+            for r in rows:
+                pid = r['id']; pat = ('/regex:' if r['is_regex'] else '') + r['pattern']
+                send_menu(chat_id, f"#{pid} {pat}",
+                          kb([[("Edit", f"TR_EDIT_{pid}"), ("Delete", f"TR_DEL_{pid}")],
+                              [(tr(chat_id, 'back'), 'triggers')]]))
         else:
-            text = "No triggers."
-        send_menu(chat_id, text, kb_back(chat_id, 'triggers'))
+            send_menu(chat_id, "No triggers.", kb_back(chat_id, 'triggers'))
     else:
         STATE[(chat_id, "await_regex_test")] = {'step': 1}
         send_menu(chat_id, "Regex दर्ज करें. Example: ^hello$", kb_back(chat_id, 'triggers'))
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("TR_EDIT_"))
+def cb_tr_edit(call):
+    try:
+        pid = int(call.data.split("_")[-1])
+    except:
+        return
+    STATE[(call.message.chat.id, "await_tr_edit")] = pid
+    send_menu(call.message.chat.id, "Send new reply text for this trigger.", kb_back(call.message.chat.id, 'triggers'))
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("TR_DEL_"))
+def cb_tr_del(call):
+    try:
+        pid = int(call.data.split("_")[-1])
+    except:
+        return
+    conn = db(); c = conn.cursor()
+    c.execute("DELETE FROM triggers WHERE id=?",(pid,))
+    conn.commit(); conn.close()
+    send_menu(call.message.chat.id, "Deleted.", kb_back(call.message.chat.id, 'triggers'))
 
 @bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_tr_pat")))
 def tr_add_flow(m):
@@ -681,6 +863,15 @@ def tr_add_reply(m):
     conn.commit(); conn.close()
     bot.reply_to(m, "Trigger added.")
 
+@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_tr_edit")) and bool(m.text))
+def tr_edit_apply(m):
+    chat_id = m.chat.id
+    pid = STATE.pop((chat_id, "await_tr_edit"))
+    conn = db(); c = conn.cursor()
+    c.execute("UPDATE triggers SET reply=? WHERE id=? AND chat_id=?", (m.text.strip(), pid, str(chat_id)))
+    conn.commit(); conn.close()
+    bot.reply_to(m, "Trigger updated.")
+
 @bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_regex_test")) and bool(m.text))
 def tr_test_flow(m):
     chat_id = m.chat.id
@@ -703,7 +894,7 @@ def tr_test_flow(m):
             bot.reply_to(m, f"Error: {e}")
         STATE.pop((chat_id, "await_regex_test"), None)
 
-# ---------- Notes ----------
+# ---------- Notes ---------- (unchanged) ----------
 @bot.message_handler(commands=['note'])
 def cmd_note(m):
     parts = m.text.split(maxsplit=2)
@@ -834,55 +1025,86 @@ def rss_get_items(url, limit=5, timeout=10):
     except Exception as e:
         logging.warning(f"rss error: {e}")
         return []
-        
-        # ---------- Safety overrides (fix previously-sent helpers if any) ----------
-# Re-declare main_menu_kb to ensure the final assembled file has a correct implementation.
-def main_menu_kb(chat_id):
-    return kb([
-        [(bt(chat_id, 'verify'), "verify"), (bt(chat_id, 'welcome'), "welcome")],
-        [(bt(chat_id, 'triggers'), "triggers"), (bt(chat_id, 'schedule'), "schedule")],
-        [(bt(chat_id, 'clean'), "clean"), (bt(chat_id, 'block'), "block")],
-        [(bt(chat_id, 'lang'), "lang"), (bt(chat_id, 'advanced'), "advanced")],
-        [(bt(chat_id, 'group'), "group")]
-    ])
 
-# ---------- Subscriptions ----------
-def subs_get(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['subscriptions_json'], []) or []
+# ---------- Federation-lite ----------
+def federation_sync(chats, payload):
+    for c in chats:
+        try:
+            bot.send_message(int(c), f"[Federation] {payload}")
+        except Exception:
+            pass
 
-def subs_set(chat_id, arr):
-    set_setting(str(chat_id), 'subscriptions_json', jdump(arr))
-
-@bot.callback_query_handler(func=lambda c: c.data == "SUBS")
-def cb_subs(call):
-    chat_id = call.message.chat.id
-    send_menu(chat_id, "Subscriptions:", kb([[("Add", "SUBS_ADD"), ("List", "SUBS_LIST")], [(tr(chat_id, 'back'), 'advanced')]]))
-
-@bot.callback_query_handler(func=lambda c: c.data in ("SUBS_ADD", "SUBS_LIST"))
-def cb_subs_ops(call):
-    chat_id = call.message.chat.id
-    if call.data == "SUBS_ADD":
-        STATE[(chat_id, "await_subs")] = True
-        send_menu(chat_id, "Format: name days (e.g., pro 30)", kb_back(chat_id, 'SUBS'))
-    else:
-        arr = subs_get(chat_id)
-        if arr:
-            text = "Subs:\n" + "\n".join(f"- {a['name']} till {a['until']}" for a in arr)
-        else:
-            text = "No subs."
-        send_menu(chat_id, text, kb_back(chat_id, 'SUBS'))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_subs")) and bool(m.text))
-def subs_add_text(m):
+@bot.message_handler(commands=['federate'])
+def cmd_federate(m):
     parts = m.text.split()
+    if ':' not in m.text or len(parts) < 3:
+        bot.reply_to(m, "Use: /federate <chat_ids...> : <text>"); return
+    ids_part, text_part = m.text.split(':', 1)
+    chat_ids = [p for p in ids_part.split()[1:] if p.lstrip('-').isdigit()]
+    payload = text_part.strip()
+    federation_sync(chat_ids, payload)
+    bot.reply_to(m, f"Sent to {len(chat_ids)} chats.")
+
+# ---------- Blacklist commands ----------
+@bot.message_handler(commands=['blackadd'])
+def cmd_blackadd(m):
+    parts = m.text.split(maxsplit=1)
     if len(parts) < 2:
-        bot.reply_to(m, "Use: name days"); return
-    name, days = parts[0], clamp(safe_int(parts[1], 7), 1, 365)
-    until = (datetime.utcnow() + timedelta(days=days)).strftime('%Y-%m-%d')
-    arr = subs_get(m.chat.id); arr.append({'name': name, 'until': until})
-    subs_set(m.chat.id, arr); STATE.pop((m.chat.id, "await_subs"), None)
-    bot.reply_to(m, f"Added {name} till {until}")
+        bot.reply_to(m, "Use: /blackadd word"); return
+    w = parts[1].strip()
+    conn = db(); c = conn.cursor()
+    c.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(m.chat.id), w))
+    conn.commit(); conn.close()
+    bot.reply_to(m, f"Blacklisted: {w}")
+
+@bot.message_handler(commands=['blacklist'])
+def cmd_blacklist(m):
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(m.chat.id),))
+    rows = [r['word'] for r in c.fetchall()]; conn.close()
+    if rows:
+        text = "Blacklist:\n" + "\n".join(f"- {w}" for w in rows)
+    else:
+        text = "No words."
+    for chunk in paginate(text):
+        bot.reply_to(m, chunk)
+
+# ---------- XP / Leveling ----------
+def xp_add(chat_id, user_id, amount=1):
+    with XP_LOCK:
+        conn = db(); c = conn.cursor()
+        c.execute("SELECT points FROM xp WHERE chat_id=? AND user_id=?", (str(chat_id), str(user_id)))
+        row = c.fetchone()
+        if row:
+            pts = row['points'] + amount
+            c.execute("UPDATE xp SET points=?, last_at=? WHERE chat_id=? AND user_id=?", (pts, now_ts(), str(chat_id), str(user_id)))
+        else:
+            pts = amount
+            c.execute("INSERT INTO xp(chat_id,user_id,points,last_at) VALUES(?,?,?,?)", (str(chat_id), str(user_id), pts, now_ts()))
+        conn.commit(); conn.close()
+        return pts
+
+def xp_get(chat_id, user_id):
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT points FROM xp WHERE chat_id=? AND user_id=?", (str(chat_id), str(user_id)))
+    row = c.fetchone(); conn.close()
+    return row['points'] if row else 0
+
+@bot.message_handler(commands=['rank'])
+def cmd_rank(m):
+    pts = xp_get(m.chat.id, m.from_user.id)
+    bot.reply_to(m, f"Your XP: {pts}")
+
+@bot.message_handler(commands=['top'])
+def cmd_top(m):
+    conn = db(); c = conn.cursor()
+    c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC LIMIT 10", (str(m.chat.id),))
+    rows = c.fetchall(); conn.close()
+    if rows:
+        text = "Top XP:\n" + "\n".join(f"{i+1}. {r['user_id']} — {r['points']}" for i, r in enumerate(rows))
+    else:
+        text = "No XP yet."
+    bot.reply_to(m, text)
 
 # ---------- Plugins (registry only) ----------
 def plugins_get(chat_id):
@@ -927,7 +1149,7 @@ def plug_add_text(m):
     STATE.pop((m.chat.id, "await_plug"), None)
     bot.reply_to(m, f"Plugin {name}: {'on' if (onoff == 'on') else 'off'}")
 
-# ---------- Dumps ----------
+# ---------- Dumps & Mod-Logs ----------
 @bot.callback_query_handler(func=lambda c: c.data in ("DUMP_T", "DUMP_S"))
 def cb_dump_ops(call):
     chat_id = call.message.chat.id
@@ -954,42 +1176,28 @@ def dump_set_target(m):
     STATE.pop((chat_id, "await_dump_target"), None)
     bot.reply_to(m, f"Dump target set: {target}")
 
-@bot.message_handler(content_types=['photo', 'video', 'document', 'audio', 'sticker', 'voice', 'text'])
-def dump_forward(m):
-    try:
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT enabled, forward_to FROM dumps WHERE chat_id=?", (str(m.chat.id),))
-        row = c.fetchone(); conn.close()
-        if not row or not row['enabled'] or not row['forward_to']:
-            return
-        # safe int for target
+def log_action(chat_id, text):
+    # send to configured mod log target in menu_json
+    menu = menu_get(chat_id)
+    target = menu.get('mod_log_target')
+    if not target:
+        # also check old dumps table
         try:
-            target = int(row['forward_to'])
-        except Exception:
-            # forward_to might be not numeric; try sending as string id (telegram requires int)
-            try:
-                target = int(str(row['forward_to']).strip())
-            except Exception:
-                return
-        if getattr(m, 'text', None):
-            bot.send_message(target, f"[Dump] {safe_html(m.text[:350])}")
-        elif m.photo:
-            file_id = m.photo[-1].file_id
-            bot.send_photo(target, file_id, caption="[Dump]")
-        elif m.document:
-            bot.send_document(target, m.document.file_id, caption="[Dump]")
-        elif m.video:
-            bot.send_video(target, m.video.file_id, caption="[Dump]")
-        elif m.voice:
-            bot.send_voice(target, m.voice.file_id, caption="[Dump]")
-        elif m.audio:
-            bot.send_audio(target, m.audio.file_id, caption="[Dump]")
-        elif m.sticker:
-            bot.send_sticker(target, m.sticker.file_id)
+            conn = db(); c = conn.cursor()
+            c.execute("SELECT forward_to FROM dumps WHERE chat_id=?", (str(chat_id),))
+            row = c.fetchone(); conn.close()
+            if row and row['forward_to']:
+                target = int(row['forward_to'])
+        except:
+            target = None
+    if not target:
+        return
+    try:
+        bot.send_message(int(target), f"[ModLog] {chat_id}: {text}")
     except Exception as e:
-        logging.warning(f"dump forward error: {e}")
+        logging.warning(f"log_action error: {e}")
 
-# ---------- Message filters & locks (already defined handlers earlier) ----------
+# ---------- Message filters & locks enforcement ----------
 MAX_MSG_LEN = 4096
 
 def paginate(text, limit=MAX_MSG_LEN):
@@ -1003,17 +1211,67 @@ def paginate(text, limit=MAX_MSG_LEN):
         chunks.append(s[:limit]); s = s[limit:]
     return chunks
 
-# ---------- Lock enforcement helpers ----------
-def enforce_lock_delete(m, action_tag):
+# enforcement helper: delete and log
+def enforce_delete(m, reason="deleted"):
     try:
         bot.delete_message(m.chat.id, m.message_id)
     except Exception:
         pass
-    track(m.chat.id, m.from_user.id, action_tag)
+    track(m.chat.id, m.from_user.id, f"deleted:{reason}")
+    log_action(m.chat.id, f"Deleted message from {m.from_user.id} — {reason}")
 
-# (photo/video/sticker/forward handlers are already defined in previous parts and will be used)
+# message handler for general messages: triggers, locks, xp, flood
+@bot.message_handler(content_types=['text', 'photo', 'video', 'sticker', 'document', 'audio', 'voice'])
+def handle_message(m):
+    chat_id = m.chat.id
+    user_id = m.from_user.id
+    text = getattr(m, 'text', '') or ''
+    # ignore bot messages
+    if m.from_user.is_bot:
+        return
 
-# ---------- Polls ----------
+    # 1) Flood check
+    if check_flood(chat_id, user_id):
+        # mute or delete -- simple delete and log
+        enforce_delete(m, "flood")
+        return
+
+    # 2) blacklist check
+    if contains_blacklist(chat_id, text):
+        enforce_delete(m, "blacklist")
+        return
+
+    # 3) locks enforcement
+    locks = get_locks(chat_id)
+    # urls detection
+    if locks.get('urls'):
+        if re.search(r'https?://', text or '') or re.search(r'www\.', text or ''):
+            enforce_delete(m, "url")
+            return
+    if locks.get('forwards') and getattr(m, 'forward_from', None):
+        enforce_delete(m, "forward")
+        return
+    if locks.get('photos') and getattr(m, 'photo', None):
+        enforce_delete(m, "photo")
+        return
+    if locks.get('stickers') and getattr(m, 'sticker', None):
+        enforce_delete(m, "sticker")
+        return
+
+    # 4) triggers
+    rep = match_trigger(chat_id, text)
+    if rep:
+        bot.reply_to(m, rep)
+        track(chat_id, user_id, "trigger_reply")
+
+    # 5) XP awarding if enabled
+    menu = menu_get(chat_id)
+    if menu.get('xp_enabled', False) and text and not text.startswith('/'):
+        # simple rate: 1 point per message; more complex rate-limits possible
+        new_pts = xp_add(chat_id, user_id, 1)
+        track(chat_id, user_id, "xp_gain")
+
+# ---------- Polls (unchanged) ----------
 def polls_create(chat_id, question, options, multiple=False):
     conn = db(); c = conn.cursor()
     c.execute("INSERT INTO polls(chat_id,question,options_json,multiple,open,created_at) VALUES(?,?,?,?,?,?)",
@@ -1061,14 +1319,10 @@ def cb_polls_menu(call):
     else:
         send_menu(chat_id, "Advanced:", kb([[("Subs", "SUBS"), ("Plugins", "PLUG")], [("Polls", "PL_MENU")], [(tr(chat_id, 'back'), 'back_main')]]))
 
-@bot.callback_query_handler(func=lambda c: c.data == "PL_MENU")
-def cb_poll_root(call):
-    chat_id = call.message.chat.id
-    send_menu(chat_id, "Polls:", kb([[("➕ New", "PL_NEW"), ("📋 List", "PL_LIST")], [(tr(chat_id, 'back'), 'advanced')]]))
-
 @bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_poll_q")) and bool(m.text))
 def polls_new_text(m):
     chat_id = m.chat.id
+    st = STATE.get((chat_id, "await_poll_q"))
     STATE.pop((chat_id, "await_poll_q"), None)
     if '|' not in m.text:
         bot.reply_to(m, "Format: Question | opt1;opt2;opt3"); return
@@ -1091,7 +1345,7 @@ def cb_poll_vote(call):
     row = polls_get(chat_id, pid)
     if not row: return
     if not row['open']:
-        send_menu(chat_id, "Poll बंद है.", polls_render_kb(pid, jload(row['options_json'], {})['opts'])); return
+        send_menu(chat_id, "Poll बंद है.", polls_render_kb(pid, jload(row['options_json'], {})['opts']')); return
     data = jload(row['options_json'], {'opts': [], 'votes': {}})
     if idx < 0 or idx >= len(data['opts']): return
     votes = data.get('votes', {})
@@ -1120,7 +1374,7 @@ def cb_poll_close(call):
     counts = [len(data['votes'].get(str(i), [])) for i in range(len(data['opts']))]
     send_menu(chat_id, f"Closed #{pid}\n" + "\n".join(f"- {data['opts'][i]}: {counts[i]}" for i in range(len(counts))), kb([[("🔙 Back", "PL_MENU")]]))
 
-# ---------- Pagination ----------
+# ---------- Pagination (unchanged) ----------
 def render_list(title, items, back_cb, page=1, per_page=20, prefix=""):
     total = len(items)
     pages = max(1, (total + per_page - 1)//per_page)
@@ -1172,7 +1426,7 @@ def cmd_backup(m):
     for tbl, key in [
         ("settings", "chat_id"), ("triggers", "chat_id"), ("notes", "chat_id"),
         ("commands", "chat_id"), ("blacklist", "chat_id"), ("analytics", "chat_id"),
-        ("punishments", "chat_id"), ("dumps", "chat_id"), ("polls", "chat_id")
+        ("punishments", "chat_id"), ("dumps", "chat_id"), ("polls", "chat_id"), ("xp", "chat_id")
     ]:
         c.execute(f"SELECT * FROM {tbl} WHERE {key}=?", (str(m.chat.id),))
         rows = [dict(r) for r in c.fetchall()]
@@ -1199,7 +1453,7 @@ def cmd_restore(m):
         data = jload(m.reply_to_message.text.strip(), {})
         conn = db(); c = conn.cursor()
         for tbl, rows in data.items():
-            if tbl not in ("settings", "triggers", "notes", "commands", "blacklist", "analytics", "punishments", "dumps", "polls"):
+            if tbl not in ("settings", "triggers", "notes", "commands", "blacklist", "analytics", "punishments", "dumps", "polls", "xp"):
                 continue
             for r in rows:
                 if tbl == "settings":
@@ -1232,12 +1486,15 @@ def cmd_restore(m):
                     c.execute("INSERT INTO polls(chat_id,question,options_json,multiple,open,created_at) VALUES(?,?,?,?,?,?)",
                               (str(m.chat.id), r.get('question',''), r.get('options_json','{"opts":[],"votes":{}}'),
                                r.get('multiple',0), r.get('open',1), r.get('created_at', now_ts())))
+                elif tbl == "xp":
+                    c.execute("INSERT INTO xp(chat_id,user_id,points,last_at) VALUES(?,?,?,?)",
+                              (str(m.chat.id), r.get('user_id',''), r.get('points',0), r.get('last_at', now_ts())))
         conn.commit(); conn.close()
         bot.reply_to(m, "Restore done.")
     except Exception as e:
         bot.reply_to(m, f"Restore error: {e}")
 
-# ---------- Manual Scheduler ----------
+# ---------- Manual Scheduler (unchanged) ----------
 def sched_get(chat_id):
     row = get_settings(str(chat_id))
     menu = jload(row['menu_json'], {}) or {}
@@ -1319,61 +1576,65 @@ def sched_tick():
 
 Thread(target=sched_tick, daemon=True).start()
 
-# ---------- Federation-lite ----------
-def federation_sync(chats, payload):
-    for c in chats:
+# ---------- Auto-clean background thread ----------
+def auto_clean_worker():
+    while True:
         try:
-            bot.send_message(int(c), f"[Federation] {payload}")
-        except Exception:
-            pass
+            nowt = now_ts()
+            to_delete = []
+            with AUTO_CLEAN_LOCK:
+                remain = []
+                for (chat_id, msg_id, delete_at) in AUTO_CLEAN_QUEUE:
+                    if delete_at <= nowt:
+                        to_delete.append((chat_id, msg_id))
+                    else:
+                        remain.append((chat_id, msg_id, delete_at))
+                AUTO_CLEAN_QUEUE[:] = remain
+            for (chat_id, msg_id) in to_delete:
+                try:
+                    bot.delete_message(chat_id, msg_id)
+                except Exception:
+                    pass
+            time.sleep(2)
+        except Exception as e:
+            logging.warning(f"auto_clean_worker error: {e}")
+            time.sleep(5)
 
-@bot.message_handler(commands=['federate'])
-def cmd_federate(m):
-    parts = m.text.split()
-    if ':' not in m.text or len(parts) < 3:
-        bot.reply_to(m, "Use: /federate <chat_ids...> : <text>"); return
-    ids_part, text_part = m.text.split(':', 1)
-    chat_ids = [p for p in ids_part.split()[1:] if p.lstrip('-').isdigit()]
-    payload = text_part.strip()
-    federation_sync(chat_ids, payload)
-    bot.reply_to(m, f"Sent to {len(chat_ids)} chats.")
+Thread(target=auto_clean_worker, daemon=True).start()
 
-# ---------- Blacklist commands ----------
-@bot.message_handler(commands=['blackadd'])
-def cmd_blackadd(m):
-    parts = m.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: /blackadd word"); return
-    w = parts[1].strip()
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(m.chat.id), w))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Blacklisted: {w}")
-
-@bot.message_handler(commands=['blacklist'])
-def cmd_blacklist(m):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(m.chat.id),))
-    rows = [r['word'] for r in c.fetchall()]; conn.close()
-    if rows:
-        text = "Blacklist:\n" + "\n".join(f"- {w}" for w in rows)
-    else:
-        text = "No words."
-    for chunk in paginate(text):
-        bot.reply_to(m, chunk)
-
-# ---------- Analytics views (extra) ----------
-@bot.callback_query_handler(func=lambda c: c.data == "g_stats_more")
-def cb_stats_more(call):
-    chat_id = call.message.chat.id
-    text = tr(chat_id, 'stats_title') + "\n\n" + stats_report(chat_id, 7) + "\n—\n" + stats_report(chat_id, 30)
-    for chunk in paginate(text):
+# ---------- Captcha expiry/kick checker ----------
+def captcha_expiry_worker():
+    while True:
         try:
-            bot.send_message(chat_id, chunk)
-        except Exception:
-            pass
+            nowt = now_ts()
+            expired = []
+            # default timeout 60s unless overridden per-chat in menu
+            for key, val in list(pending_captcha.items()):
+                chat_id, user_id = key
+                created = val['created_at']
+                menu = menu_get(chat_id)
+                timeout = int(menu.get('captcha_timeout', 60))
+                if nowt - created > timeout:
+                    expired.append(key)
+            for key in expired:
+                data = pending_captcha.pop(key, None)
+                if not data:
+                    continue
+                chat_id, user_id = key
+                # attempt to kick the user (requires bot to be admin)
+                try:
+                    bot.kick_chat_member(chat_id, user_id)
+                    log_action(chat_id, f"Kicked {user_id} for failing captcha.")
+                except Exception as e:
+                    logging.warning(f"captcha kick error: {e}")
+            time.sleep(5)
+        except Exception as e:
+            logging.warning(f"captcha_expiry_worker error: {e}")
+            time.sleep(5)
 
-# ---------- Housekeeping ----------
+Thread(target=captcha_expiry_worker, daemon=True).start()
+
+# ---------- Housekeeping (prune notes xp cache etc) ----------
 def bg_housekeep():
     while True:
         try:
@@ -1381,9 +1642,9 @@ def bg_housekeep():
             c.execute("DELETE FROM notes WHERE expires_at>0 AND expires_at<?", (now_ts(),))
             conn.commit(); conn.close()
             # prune flood cache
-            now = now_ts()
+            nowt = now_ts()
             for key, arr in list(user_messages.items()):
-                user_messages[key] = [t for t in arr if now - t <= 120]
+                user_messages[key] = [t for t in arr if nowt - t <= 120]
         except Exception as e:
             logging.warning(f"housekeep: {e}")
         time.sleep(60)
