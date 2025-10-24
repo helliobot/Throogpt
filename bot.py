@@ -1287,8 +1287,10 @@ def handle_customcmd_create(message):
         sent_message = bot.reply_to(message, translate('admin_only', chat_id))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
         return
+
     if chat_id not in bot.temp_data:
         return
+
     try:
         trigger, response = message.text.split('|', 1)
         trigger = sanitize_input(trigger.strip('/ '))
@@ -1303,8 +1305,8 @@ def handle_customcmd_create(message):
             sent_message = bot.reply_to(message, translate('command_exists', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
-        if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)", 
-                            (chat_id, trigger, response, 'all', json.dumps([]))):
+        if safe_db_operation("INSERT INTO custom_commands VALUES (?, ?, ?, ?, ?)",
+                             (chat_id, trigger, response, 'all', json.dumps([]))):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('command_added', chat_id))
@@ -1313,10 +1315,12 @@ def handle_customcmd_create(message):
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
     except ValueError:
         delete_previous_reply(chat_id)
         sent_message = bot.reply_to(message, translate('command_added', chat_id).replace("added", "error adding"))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
 
 def handle_poll_new(message):
     chat_id = str(message.chat.id)
@@ -1325,22 +1329,26 @@ def handle_poll_new(message):
         sent_message = bot.reply_to(message, translate('admin_only', chat_id))
         bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
         return
+
     if chat_id not in bot.temp_data:
         return
+
     try:
         parts = message.text.split('|')
         question = sanitize_input(parts[0].strip())
         options = [sanitize_input(opt.strip()) for opt in parts[1].split(',')]
         anonymous = 1 if parts[2].strip().lower() == 'true' else 0
         timer = parse_time(parts[3].strip()) if len(parts) > 3 else 0
+
         if len(options) < 2 or len(question) > 255:
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('poll_invalid', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
             return
+
         poll_id = str(random.randint(1000, 9999))
-        if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                           (chat_id, poll_id, question, json.dumps(options), anonymous, timer, json.dumps({}))):
+        if safe_db_operation("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, ?)",
+                             (chat_id, poll_id, question, json.dumps(options), anonymous, timer, json.dumps({}))):
             del bot.temp_data[chat_id]
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('poll_created', chat_id, poll_id=poll_id))
@@ -1349,6 +1357,7 @@ def handle_poll_new(message):
             delete_previous_reply(chat_id)
             sent_message = bot.reply_to(message, translate('poll_invalid', chat_id))
             bot.temp_data[f"last_reply_{chat_id}"] = sent_message.message_id
+
     except ValueError:
         delete_previous_reply(chat_id)
         sent_message = bot.reply_to(message, translate('poll_invalid', chat_id))
