@@ -1,101 +1,175 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Advanced Telegram Group Manager Bot — single-file, updated with enhanced features (welcome, captcha, locks, xp, logs, triggers editing, auto-clean)
-# Buttons-first UX. Cleanup policy preserved: naya message send hone ke baad hi pichla delete.
+"""
+Advanced Telegram Group Management Bot (v7.2+)
+Framework: Telebot (pyTelegramBotAPI)
+Database: SQLite
+Language: Hindi (Default) + English Support
+"""
 
-import os, sqlite3, json, time, re, random, logging, html, threading
+import os
+import sys
+import logging
+import sqlite3
+import time
+import json
+import re
 from datetime import datetime, timedelta
-from threading import Lock, Thread
+from threading import Thread, Lock
 from collections import defaultdict
-from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
+import random
+import html
 
-import telebot
-from telebot import types
-from dotenv import load_dotenv
+try:
+    import telebot
+    from telebot import types
+except ImportError:
+    print("❌ Telebot not installed. Run: pip install pyTelegramBotAPI")
+    sys.exit(1)
 
-# ---------- Logging ----------
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+# ---------- Logging Setup ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
-# ---------- Env & Bot ----------
-load_dotenv()
-TOKEN = os.getenv('BOT_TOKEN')
-if not TOKEN:
-    logging.error("❌ BOT_TOKEN not found! Check your Choreo Environment Variables.")
-    raise SystemExit(1)
+# ---------- Bot Token ----------
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+if not BOT_TOKEN:
+    logging.error("❌ BOT_TOKEN environment variable missing!")
+    sys.exit(1)
 
-bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ---------- Globals ----------
-DB_PATH = os.getenv('DB_PATH', 'bot.db')
-MENU_CACHE = {}
-flood_locks = defaultdict(Lock)
-user_messages = defaultdict(list)  # flood cache
-last_reply_id = {}                 # per-chat last bot message id
-START_MESSAGE_IDS = set()          # /start messages protected from cleanup
-STATE = {}                         # transient per-chat states
-LOCK = Lock()
-DEBUG_CHATS = set()
+# ---------- Database Path ----------
+DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 
-# New: pending captcha verifications: {(chat_id,user_id): {ans, msg_id, created_at}}
-pending_captcha = {}
-# New: xp cache updated in db
-XP_LOCK = Lock()
-
-# messages scheduled for auto-clean: list of (chat_id, message_id, delete_at)
-AUTO_CLEAN_QUEUE = []
+# ---------- Global State & Locks ----------
+STATE = {}  # For multi-step conversations: {(chat_id, key): data}
+user_messages = defaultdict(list)  # Flood tracking: {(chat_id, user_id): [timestamps]}
+pending_captcha = {}  # {(chat_id, user_id): {'answer': int, 'created_at': ts}}
+rejoin_tracker = defaultdict(set)  # {chat_id: {user_id}}
+AUTO_CLEAN_QUEUE = []  # [(chat_id, msg_id, delete_at_ts), ...]
 AUTO_CLEAN_LOCK = Lock()
+CAPTCHA_LOCK = Lock()
+FLOOD_LOCK = Lock()
 
-# ---------- Utilities ----------
+# ---------- Language Dictionary (Hindi Default) ----------
+LANG = {
+    'hi': {
+        'admin_only': '❌ यह कमांड सिर्फ़ admin के लिए है।',
+        'setting_updated': '✅ सेटिंग अपडेट हो गई।',
+        'error_occurred': '⚠️ कुछ गलत हो गया।',
+        'invalid_input': '❌ गलत input।',
+        'user_not_found': '❌ User नहीं मिला।',
+        'user_warned': '⚠️ {user} को warn किया गया ({count}/3)',
+        'user_muted': '🔇 {user} को mute कर दिया ({duration})',
+        'user_banned': '🚫 {user} को ban कर दिया',
+        'user_kicked': '👢 {user} को kick कर दिया',
+        'flood_detected': '⚠️ Spam मत करो! ({count}/{limit})',
+        'blacklist_violation': '❌ Blacklist word detect हुआ! Violation: {count}/3',
+        'captcha_verify': '🔐 कृपया captcha solve करें:
+{q1} + {q2} = ?',
+        'captcha_success': '✅ Captcha verified! Welcome {name}',
+        'captcha_failed': '❌ Captcha गलत है।',
+        'welcome_message': '👋 Welcome {name}!',
+        'goodbye_message': '👋 {name} left the group.',
+        'usage': '📖 Usage: {usage}',
+        'main_menu': '🏠 Main Menu',
+        'back': '⬅️ Back',
+        'cancel': '❌ Cancel',
+        'confirm': '✅ Confirm',
+        'enabled': '✅ Enabled',
+        'disabled': '❌ Disabled',
+        'nobody': 'Nobody ❌',
+        'admin': 'Admin 👮',
+        'all': 'All 🌍',
+        'note_added': '✅ Note "{key}" add हो गया।',
+        'note_deleted': '✅ Note "{key}" delete हो गया।',
+        'trigger_added': '✅ Trigger add हो गया।',
+        'poll_created': '📊 Poll बन गया।',
+        'xp_gained': '🎯 +{points} XP!',
+        'rank_display': '🏆 {name}: Rank #{rank}, XP: {xp}',
+    },
+    'en': {
+        'admin_only': '❌ This command is admin-only.',
+        'setting_updated': '✅ Setting updated.',
+        'error_occurred': '⚠️ Something went wrong.',
+        'invalid_input': '❌ Invalid input.',
+        'user_not_found': '❌ User not found.',
+        'user_warned': '⚠️ {user} warned ({count}/3)',
+        'user_muted': '🔇 {user} muted ({duration})',
+        'user_banned': '🚫 {user} banned',
+        'user_kicked': '👢 {user} kicked',
+        'flood_detected': '⚠️ Stop spamming! ({count}/{limit})',
+        'blacklist_violation': '❌ Blacklist word detected! Violation: {count}/3',
+        'captcha_verify': '🔐 Please solve captcha:
+{q1} + {q2} = ?',
+        'captcha_success': '✅ Captcha verified! Welcome {name}',
+        'captcha_failed': '❌ Wrong captcha.',
+        'welcome_message': '👋 Welcome {name}!',
+        'goodbye_message': '👋 {name} left the group.',
+        'usage': '📖 Usage: {usage}',
+        'main_menu': '🏠 Main Menu',
+        'back': '⬅️ Back',
+        'cancel': '❌ Cancel',
+        'confirm': '✅ Confirm',
+        'enabled': '✅ Enabled',
+        'disabled': '❌ Disabled',
+        'nobody': 'Nobody ❌',
+        'admin': 'Admin 👮',
+        'all': 'All 🌍',
+        'note_added': '✅ Note "{key}" added.',
+        'note_deleted': '✅ Note "{key}" deleted.',
+        'trigger_added': '✅ Trigger added.',
+        'poll_created': '📊 Poll created.',
+        'xp_gained': '🎯 +{points} XP!',
+        'rank_display': '🏆 {name}: Rank #{rank}, XP: {xp}',
+    }
+}
+
+def _(chat_id, key, **kwargs):
+    """Get translated text"""
+    row = get_settings(str(chat_id))
+    lang = row.get('lang', 'hi')
+    text = LANG.get(lang, LANG['hi']).get(key, key)
+    return text.format(**kwargs) if kwargs else text
+
+# ---------- Utility Functions ----------
 def now_ts():
+    """Current Unix timestamp"""
     return int(time.time())
 
 def jdump(obj):
-    try:
-        return json.dumps(obj, ensure_ascii=False)
-    except Exception:
-        return "{}"
+    """JSON dump"""
+    return json.dumps(obj, ensure_ascii=False)
 
-def jload(s, default=None):
+def jload(text, default=None):
+    """JSON load with fallback"""
     try:
-        return json.loads(s) if s else (default if default is not None else {})
-    except Exception:
+        return json.loads(text)
+    except:
         return default
 
-def safe_int(x, d=0):
-    try:
-        return int(x)
-    except Exception:
-        return d
-
 def safe_html(text):
-    return html.escape(text or "")
+    """Escape HTML entities"""
+    return html.escape(str(text))
 
-def clamp(v, lo, hi):
-    return max(lo, min(hi, v))
-
-def is_admin_member(chat_id, user_id):
-    try:
-        m = bot.get_chat_member(chat_id, user_id)
-        return m.status in ("administrator", "creator")
-    except Exception:
-        return False
-
-def dbg(chat_id, text):
-    if chat_id in DEBUG_CHATS:
-        try: bot.send_message(chat_id, f"[DBG] {text[:350]}")
-        except Exception: pass
-
-# ---------- DB ----------
+# ---------- Database Initialization ----------
 def db():
+    """Return SQLite connection"""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    conn = db(); c = conn.cursor()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
+    """Initialize all tables (existing schema preserved)"""
+    conn = db()
+    c = conn.cursor()
+    
+    # Settings table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (
         chat_id TEXT PRIMARY KEY,
         lang TEXT DEFAULT 'hi',
         welcome_enabled INTEGER DEFAULT 1,
@@ -109,70 +183,54 @@ def init_db():
         plugins_json TEXT DEFAULT '[]',
         subscriptions_json TEXT DEFAULT '[]',
         menu_json TEXT DEFAULT '{}'
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS triggers (
+    )''')
+    
+    # Triggers table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS triggers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         pattern TEXT,
         reply TEXT,
         is_regex INTEGER DEFAULT 0
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS notes (
+    )''')
+    
+    # Notes table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS notes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         key TEXT,
         content TEXT,
         created_at INTEGER,
-        expires_at INTEGER
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS commands (
+        expires_at INTEGER DEFAULT 0
+    )''')
+    
+    # Commands table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS commands (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         cmd TEXT,
         body TEXT,
         roles TEXT DEFAULT 'all'
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS analytics (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id TEXT,
-        user_id TEXT,
-        action TEXT,
-        at INTEGER
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS blacklist (
+    )''')
+    
+    # Blacklist table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS blacklist (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         word TEXT
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS punishments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    )''')
+    
+    # XP table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS xp (
         chat_id TEXT,
         user_id TEXT,
-        type TEXT,
-        until_ts INTEGER
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS dumps (
-        chat_id TEXT PRIMARY KEY,
-        enabled INTEGER DEFAULT 0,
-        forward_to TEXT
-    )""")
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS polls (
+        points INTEGER DEFAULT 0,
+        last_at INTEGER,
+        PRIMARY KEY (chat_id, user_id)
+    )''')
+    
+    # Polls table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS polls (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         question TEXT,
@@ -180,1490 +238,2536 @@ def init_db():
         multiple INTEGER DEFAULT 0,
         open INTEGER DEFAULT 1,
         created_at INTEGER
-    )""")
-
-    # XP table
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS xp (
+    )''')
+    
+    # Dumps table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS dumps (
+        chat_id TEXT PRIMARY KEY,
+        enabled INTEGER DEFAULT 0,
+        forward_to TEXT
+    )''')
+    
+    # Analytics table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS analytics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT,
         user_id TEXT,
-        points INTEGER DEFAULT 0,
-        last_at INTEGER,
-        PRIMARY KEY (chat_id, user_id)
-    )""")
-
-    conn.commit(); conn.close()
+        action TEXT,
+        at INTEGER
+    )''')
+    
+    # Punishments table (existing)
+    c.execute('''CREATE TABLE IF NOT EXISTS punishments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT,
+        user_id TEXT,
+        type TEXT,
+        until_ts INTEGER
+    )''')
+    
+    conn.commit()
+    conn.close()
+    logging.info("✅ Database initialized successfully")
 
 init_db()
 
-# ---------- Settings helpers ----------
+# ---------- Settings Helper Functions (existing, preserved) ----------
 def ensure_settings(chat_id):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT chat_id FROM settings WHERE chat_id=?", (chat_id,))
+    """Ensure settings row exists for chat"""
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT chat_id FROM settings WHERE chat_id=?", (str(chat_id),))
     if not c.fetchone():
-        c.execute("INSERT INTO settings(chat_id) VALUES(?)", (chat_id,))
+        c.execute('''INSERT INTO settings 
+            (chat_id, lang, welcome_enabled, leave_enabled, flood_window, flood_limit, 
+             blacklist_enabled, locks_json, roles_json, rss_json, plugins_json, 
+             subscriptions_json, menu_json) 
+            VALUES (?, 'hi', 1, 1, 15, 7, 1, '{}', '{}', '[]', '[]', '[]', '{}')''',
+            (str(chat_id),))
         conn.commit()
     conn.close()
 
 def get_settings(chat_id):
+    """Get settings row as dict"""
     ensure_settings(str(chat_id))
-    conn = db(); c = conn.cursor()
+    conn = db()
+    c = conn.cursor()
     c.execute("SELECT * FROM settings WHERE chat_id=?", (str(chat_id),))
-    row = c.fetchone(); conn.close()
-    return row
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else {}
 
 def set_setting(chat_id, key, value):
+    """Update single setting"""
     ensure_settings(str(chat_id))
-    conn = db(); c = conn.cursor()
+    conn = db()
+    c = conn.cursor()
     c.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (value, str(chat_id)))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
-# helper to store structured menu settings inside menu_json
 def menu_get(chat_id):
+    """Get menu_json as dict"""
     row = get_settings(str(chat_id))
-    return jload(row['menu_json'], {}) or {}
+    return jload(row.get('menu_json', '{}'), {})
 
-def menu_set(chat_id, obj):
-    set_setting(str(chat_id), 'menu_json', jdump(obj))
+def menu_set(chat_id, data):
+    """Set menu_json"""
+    set_setting(str(chat_id), 'menu_json', jdump(data))
 
-# ---------- Cleanup-safe send ----------
-def send_menu(chat_id, text, markup=None, tag=None, skip_cleanup=False, mark_start=False, auto_clean_seconds=None):
-    """
-    Policy: pehle send, fir purana delete (agar hai).
-    skip_cleanup=True ho to purana mat delete.
-    mark_start=True: is message ko /start protection milegi (auto-delete kabhi nahi).
-    auto_clean_seconds: if provided, schedule this bot message for deletion after that many seconds.
-    """
-    m = bot.send_message(chat_id, text, reply_markup=markup)
-    if mark_start:
-        START_MESSAGE_IDS.add((chat_id, m.message_id))
-    if not skip_cleanup:
-        prev = last_reply_id.get(str(chat_id))
-        if prev and prev != m.message_id and (chat_id, prev) not in START_MESSAGE_IDS:
-            try:
-                bot.delete_message(chat_id, prev)
-            except Exception:
-                pass
-    last_reply_id[str(chat_id)] = m.message_id
-    if tag:
-        MENU_CACHE[(str(chat_id), tag)] = m.message_id
-
-    # schedule auto-clean of this bot message if requested
-    if auto_clean_seconds:
-        with AUTO_CLEAN_LOCK:
-            AUTO_CLEAN_QUEUE.append((chat_id, m.message_id, now_ts() + int(auto_clean_seconds)))
-
-    return m
-
-# ---------- Languages ----------
-LANG = {
-    'en': {
-        'main': """🔧 MAIN MENU
-
-🛡️ Verify
-👋 Welcome
-📬 Triggers
-⏰ Schedule
-🧹 Clean
-🚫 Block
-🌐 Lang
-⚙️ Advanced
-👥 Group""",
-        'back': "⬅️ Back",
-        'group': "👥 GROUP MANAGEMENT",
-        'ok': "✅ Done",
-        'cancel': "✖️ Cancel",
-        'welcome_on': "Welcome enabled.",
-        'welcome_off': "Welcome disabled.",
-        'stats_title': "📈 Analytics (7d/30d):",
-        'start': "👋 Hello! Use the menu below to manage this chat."
-    },
-    'hi': {
-        'main': """🔧 मुख्य मेनू
-
-🛡️ वेरिफ़ाई
-👋 स्वागत
-📬 ट्रिगर्स
-⏰ शेड्यूल
-🧹 क्लीन
-🚫 ब्लॉक
-🌐 भाषा
-⚙️ एडवांस्ड
-👥 ग्रुप""",
-        'back': "⬅️ पीछे",
-        'group': "👥 ग्रुप प्रबंधन",
-        'ok': "✅ हो गया",
-        'cancel': "✖️ रद्द",
-        'welcome_on': "स्वागत संदेश चालू।",
-        'welcome_off': "स्वागत संदेश बंद।",
-        'stats_title': "📈 एनालिटिक्स (7दिन/30दिन):",
-        'start': "👋 नमस्ते! नीचे दिए मेनू से इस चैट को मैनेज करें."
-    }
-}
-
-def tr(chat_id, key):
+def roles_get(chat_id):
+    """Get roles_json as dict"""
     row = get_settings(str(chat_id))
-    lang = (row['lang'] if row and row['lang'] else 'hi')
-    return LANG.get(lang, LANG['hi']).get(key, key)
+    return jload(row.get('roles_json', '{}'), {})
 
-# ---------- Button labels (no split dependency) ----------
-BTN = {
-    'en': {
-        'verify': "🛡️ Verify",
-        'welcome': "👋 Welcome",
-        'triggers': "📬 Triggers",
-        'schedule': "⏰ Schedule",
-        'clean': "🧹 Clean",
-        'block': "🚫 Block",
-        'lang': "🌐 Lang",
-        'advanced': "⚙️ Advanced",
-        'group': "👥 Group",
-        'back': "⬅️ Back",
-        'locks': "🔒 Locks",
-        'xp': "🏆 XP/Leaderboard",
-        'logs': "🗂️ Mod Logs"
-    },
-    'hi': {
-        'verify': "🛡️ वेरिफ़ाई",
-        'welcome': "👋 स्वागत",
-        'triggers': "📬 ट्रिगर्स",
-        'schedule': "⏰ शेड्यूल",
-        'clean': "🧹 क्लीन",
-        'block': "🚫 ब्लॉक",
-        'lang': "🌐 भाषा",
-        'advanced': "⚙️ एडवांस्ड",
-        'group': "👥 ग्रुप",
-        'back': "⬅️ पीछे",
-        'locks': "🔒 लॉक",
-        'xp': "🏆 XP/लिडरबोर्ड",
-        'logs': "🗂️ मॉड लॉग"
-    }
-}
+def roles_set(chat_id, data):
+    """Set roles_json"""
+    set_setting(str(chat_id), 'roles_json', jdump(data))
 
-def bt(chat_id, key):
+def locks_get(chat_id):
+    """Get locks_json as dict"""
     row = get_settings(str(chat_id))
-    lang = (row['lang'] if row and row['lang'] else 'hi')
-    return BTN.get(lang, BTN['hi']).get(key, key)
+    return jload(row.get('locks_json', '{}'), {})
 
-# ---------- Keyboards ----------
-def kb(rows):
-    markup = types.InlineKeyboardMarkup()
-    for r in rows:
-        markup.row(*[types.InlineKeyboardButton(text=t, callback_data=d) for t, d in r])
-    return markup
-
-def main_menu_kb(chat_id):
-    return kb([
-        [(bt(chat_id,'verify'),"verify"), (bt(chat_id,'welcome'),"welcome")],
-        [(bt(chat_id,'triggers'),"triggers"), (bt(chat_id,'schedule'),"schedule")],
-        [(bt(chat_id,'clean'),"clean"), (bt(chat_id,'block'),"block")],
-        [(bt(chat_id,'lang'),"lang"), (bt(chat_id,'advanced'),"advanced")],
-        [(bt(chat_id,'group'),"group")]
-    ])
-
-# ---------- Analytics ----------
-def track(chat_id, user_id, action):
+def locks_set(chat_id, data):
+    """Set locks_json"""
+    set_setting(str(chat_id), 'locks_json', jdump(data))
+    
+    # ---------- Admin & Permission Check Functions ----------
+def is_admin_member(chat_id, user_id):
+    """Check if user is admin in the chat"""
     try:
-        conn = db(); c = conn.cursor()
-        c.execute("INSERT INTO analytics(chat_id,user_id,action,at) VALUES(?,?,?,?)",
-                  (str(chat_id), str(user_id or ''), action, now_ts()))
-        conn.commit(); conn.close()
-    except Exception as e:
-        logging.warning(f"analytics error: {e}")
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ['creator', 'administrator']
+    except:
+        return False
 
-def stats_report(chat_id, days=7):
-    conn = db(); c = conn.cursor()
-    since = now_ts() - days*86400
-    c.execute("SELECT action, COUNT(*) c FROM analytics WHERE chat_id=? AND at>=? GROUP BY action ORDER BY c DESC",
-              (str(chat_id), since))
-    rows = c.fetchall(); conn.close()
-    lines = [f"{r['action']}: {r['c']}" for r in rows] or ["(no data)"]
-    return "\n".join(lines)
+def check_bot_permissions(chat_id):
+    """Check if bot has required permissions"""
+    try:
+        me = bot.get_me()
+        member = bot.get_chat_member(chat_id, me.id)
+        return {
+            'can_restrict': member.can_restrict_members,
+            'can_delete': member.can_delete_messages,
+            'can_invite': member.can_invite_users,
+            'can_pin': member.can_pin_messages,
+            'is_admin': member.status == 'administrator'
+        }
+    except:
+        return {}
 
-# ---------- Welcome Template ----------
-def welcome_tpl_get(chat_id):
-    menu = menu_get(chat_id)
-    return menu.get('welcome_tpl', "👋 Welcome, {name}!")
+def notify_missing_permission(chat_id, permission):
+    """Notify admin about missing bot permission"""
+    try:
+        admins = bot.get_chat_administrators(chat_id)
+        creator = [a for a in admins if a.status == 'creator']
+        if creator:
+            bot.send_message(
+                creator[0].user.id,
+                f"⚠️ Bot को '{permission}' permission नहीं है।
+"
+                f"Group: {chat_id}"
+            )
+    except:
+        pass
 
-def welcome_tpl_set(chat_id, text):
-    menu = menu_get(chat_id)
-    menu['welcome_tpl'] = text
-    menu_set(chat_id, menu)
-
-# ---------- Member updates (welcome/leave) ----------
-# enhanced: auto-captcha option, auto-clean scheduling, welcome with optional photo
-@bot.chat_member_handler()
-def on_member(event):
-    chat_id = event.chat.id
-    row = get_settings(str(chat_id))
-    new = event.new_chat_member
-    left = event.left_chat_member
-    menu = menu_get(chat_id)
-    auto_captcha = menu.get('auto_captcha', False)
-    auto_clean_seconds = menu.get('auto_clean_seconds', 0)  # 0 means off
-    if new and row['welcome_enabled']:
-        try:
-            tpl = welcome_tpl_get(chat_id)
-            name = safe_html(new.user.first_name or "User")
-            msg = tpl.format(name=name, id=new.user.id)
-            # If auto captcha enabled -> send a captcha challenge targeted to the user
-            if auto_captcha:
-                # create captcha and send via send_menu with buttons to verify
-                q, ans = captcha_new()
-                key = (chat_id, new.user.id)
-                sent = send_menu(chat_id, f"{safe_html(new.user.first_name or 'User')}, verify to access: {q}",
-                                 kb([[("Verify ✅", f"CAP_AUTO_{chat_id}_{new.user.id}")]]),
-                                 skip_cleanup=False, mark_start=False,
-                                 auto_clean_seconds=menu.get('welcome_auto_clean', None))
-                pending_captcha[key] = {'ans': ans, 'msg_id': sent.message_id, 'created_at': now_ts(), 'user_name': new.user.first_name}
-                # schedule potential kick later by background thread
-                track(chat_id, new.user.id, "welcome_captcha_sent")
-            else:
-                sent = bot.send_message(chat_id, msg)
-                track(chat_id, new.user.id, "welcome")
-                # if auto-clean configured for welcome messages, schedule deletion
-                if auto_clean_seconds:
-                    with AUTO_CLEAN_LOCK:
-                        AUTO_CLEAN_QUEUE.append((chat_id, sent.message_id, now_ts() + int(auto_clean_seconds)))
-        except Exception as e:
-            logging.warning(f"welcome error: {e}")
-    if left and row['leave_enabled']:
-        try:
-            name = safe_html(left.first_name or "User")
-            sent = bot.send_message(chat_id, f"👋 {name} left.")
-            track(chat_id, left.id, "leave")
-            if menu.get('auto_clean_leave', 0):
-                with AUTO_CLEAN_LOCK:
-                    AUTO_CLEAN_QUEUE.append((chat_id, sent.message_id, now_ts() + int(menu.get('auto_clean_leave', 0))))
-        except Exception as e:
-            logging.warning(f"leave error: {e}")
-
-# ---------- Flood control ----------
-def check_flood(chat_id, user_id):
-    row = get_settings(str(chat_id))
-    window = clamp(safe_int(row['flood_window'], 15), 5, 120)
-    limit = clamp(safe_int(row['flood_limit'], 7), 3, 30)
-    key = (str(chat_id), str(user_id))
-    with flood_locks[key]:
-        arr = user_messages[key]
-        now = now_ts()
-        arr = [t for t in arr if now - t <= window]
-        arr.append(now)
-        user_messages[key] = arr
-        return len(arr) > limit
-
-# ---------- Blacklist ----------
-def contains_blacklist(chat_id, text):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall(); conn.close()
-    t = (text or "").lower()
-    for r in rows:
-        if r['word'].lower() in t:
-            return True
+def has_command_permission(chat_id, user_id, command):
+    """Check if user has permission to use command based on roles_json"""
+    roles = roles_get(chat_id)
+    role = roles.get(command, 'all')  # default: all users can use
+    
+    if role == 'nobody':
+        return False
+    elif role == 'admin':
+        return is_admin_member(chat_id, user_id)
+    elif role == 'all':
+        return True
     return False
 
-# ---------- Triggers ----------
-def match_trigger(chat_id, text):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT * FROM triggers WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall(); conn.close()
-    for r in rows:
-        pat = r['pattern']
-        if r['is_regex']:
-            try:
-                if re.search(pat, text, flags=re.I):
-                    return r['reply']
-            except re.error:
-                continue
-        else:
-            if pat.lower() in (text or "").lower():
-                return r['reply']
-    return None
+# ---------- Logging & Analytics ----------
+def log_action(chat_id, user_id, action):
+    """Log action to analytics table"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO analytics (chat_id, user_id, action, at) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), action, now_ts()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"Log action failed: {e}")
 
-# ---------- Commands ----------
+def forward_log(chat_id, text):
+    """Forward log to configured channel/chat"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT forward_to FROM dumps WHERE chat_id=? AND enabled=1", (str(chat_id),))
+        row = c.fetchone()
+        conn.close()
+        if row and row['forward_to']:
+            bot.send_message(row['forward_to'], f"📋 Log from {chat_id}:
+{text}")
+    except Exception as e:
+        logging.warning(f"Forward log failed: {e}")
+
+# ---------- User Info Helpers ----------
+def get_user_display_name(user):
+    """Get user's display name"""
+    if user.username:
+        return f"@{user.username}"
+    name = user.first_name or ""
+    if user.last_name:
+        name += f" {user.last_name}"
+    return name.strip() or f"User{user.id}"
+
+def get_user_mention(user):
+    """Get HTML mention for user"""
+    name = safe_html(user.first_name or f"User{user.id}")
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+# ---------- Punishment System ----------
+def warn_user(chat_id, user_id, reason=""):
+    """Warn user with escalation (3 warns → ban)"""
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as cnt FROM punishments WHERE chat_id=? AND user_id=? AND type='warn'",
+              (str(chat_id), str(user_id)))
+    count = c.fetchone()['cnt'] + 1
+    
+    c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+              (str(chat_id), str(user_id), 'warn', now_ts()))
+    conn.commit()
+    conn.close()
+    
+    log_action(chat_id, user_id, f"warned:{reason}")
+    
+    if count >= 3:
+        ban_user(chat_id, user_id, "3 warnings")
+        return count, 'banned'
+    return count, 'warned'
+
+def mute_user(chat_id, user_id, duration_sec=3600):
+    """Mute user for specified duration"""
+    try:
+        until = now_ts() + duration_sec
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            until_date=until,
+            can_send_messages=False
+        )
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), 'mute', until))
+        conn.commit()
+        conn.close()
+        log_action(chat_id, user_id, f"muted:{duration_sec}s")
+        return True
+    except Exception as e:
+        logging.warning(f"Mute failed: {e}")
+        return False
+
+def ban_user(chat_id, user_id, reason=""):
+    """Ban user permanently"""
+    try:
+        bot.ban_chat_member(chat_id, user_id)
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), 'ban', 0))
+        conn.commit()
+        conn.close()
+        log_action(chat_id, user_id, f"banned:{reason}")
+        return True
+    except Exception as e:
+        logging.warning(f"Ban failed: {e}")
+        return False
+
+def kick_user(chat_id, user_id):
+    """Kick user (ban then unban)"""
+    try:
+        bot.ban_chat_member(chat_id, user_id)
+        bot.unban_chat_member(chat_id, user_id)
+        log_action(chat_id, user_id, "kicked")
+        return True
+    except Exception as e:
+        logging.warning(f"Kick failed: {e}")
+        return False
+
+def undo_punishment(chat_id, user_id):
+    """Undo last punishment for user"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("""SELECT id, type FROM punishments 
+                     WHERE chat_id=? AND user_id=? 
+                     ORDER BY id DESC LIMIT 1""",
+                  (str(chat_id), str(user_id)))
+        row = c.fetchone()
+        if not row:
+            return False, "No punishment found"
+        
+        pid, ptype = row['id'], row['type']
+        c.execute("DELETE FROM punishments WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+        
+        if ptype == 'ban':
+            bot.unban_chat_member(chat_id, user_id)
+        elif ptype == 'mute':
+            bot.restrict_chat_member(
+                chat_id, user_id,
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        
+        log_action(chat_id, user_id, f"undo:{ptype}")
+        return True, ptype
+    except Exception as e:
+        logging.warning(f"Undo failed: {e}")
+        return False, str(e)
+
+# ---------- Flood Protection ----------
+def check_flood(chat_id, user_id):
+    """Check if user is flooding, return (is_flood, count, limit)"""
+    with FLOOD_LOCK:
+        settings = get_settings(chat_id)
+        window = settings.get('flood_window', 15)
+        limit = settings.get('flood_limit', 7)
+        
+        key = (chat_id, user_id)
+        now = now_ts()
+        cutoff = now - window
+        
+        # Remove old messages
+        user_messages[key] = [ts for ts in user_messages[key] if ts > cutoff]
+        user_messages[key].append(now)
+        
+        count = len(user_messages[key])
+        return count > limit, count, limit
+
+# ---------- Blacklist System ----------
+def check_blacklist(chat_id, text):
+    """Check if text contains blacklisted words, return (found, word, violation_count)"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
+        words = [row['word'].lower() for row in c.fetchall()]
+        conn.close()
+        
+        text_lower = text.lower()
+        for word in words:
+            if word in text_lower:
+                return True, word, 1
+        return False, None, 0
+    except:
+        return False, None, 0
+
+def add_blacklist_violation(chat_id, user_id):
+    """Track blacklist violations, auto-ban on 3rd"""
+    conn = db()
+    c = conn.cursor()
+    c.execute("""SELECT COUNT(*) as cnt FROM punishments 
+                 WHERE chat_id=? AND user_id=? AND type='blacklist'""",
+              (str(chat_id), str(user_id)))
+    count = c.fetchone()['cnt'] + 1
+    
+    c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+              (str(chat_id), str(user_id), 'blacklist', now_ts()))
+    conn.commit()
+    conn.close()
+    
+    if count >= 3:
+        ban_user(chat_id, user_id, "3 blacklist violations")
+        return count, True
+    return count, False
+
+# ---------- Locks System ----------
+def check_locks(chat_id, message):
+    """Check if message violates any locks"""
+    locks = locks_get(chat_id)
+    
+    violations = []
+    if locks.get('urls') and message.entities:
+        for entity in message.entities:
+            if entity.type in ['url', 'text_link']:
+                violations.append('urls')
+                break
+    
+    if locks.get('photos') and message.photo:
+        violations.append('photos')
+    
+    if locks.get('videos') and message.video:
+        violations.append('videos')
+    
+    if locks.get('stickers') and message.sticker:
+        violations.append('stickers')
+    
+    if locks.get('forwards') and message.forward_date:
+        violations.append('forwards')
+    
+    if locks.get('documents') and message.document:
+        violations.append('documents')
+    
+    return violations
+
+# ---------- Captcha System ----------
+def create_captcha(chat_id, user_id):
+    """Create math captcha for new user"""
+    with CAPTCHA_LOCK:
+        num1 = random.randint(1, 10)
+        num2 = random.randint(1, 10)
+        answer = num1 + num2
+        
+        pending_captcha[(chat_id, user_id)] = {
+            'answer': answer,
+            'created_at': now_ts(),
+            'q1': num1,
+            'q2': num2
+        }
+        return num1, num2
+
+def verify_captcha(chat_id, user_id, answer):
+    """Verify captcha answer"""
+    with CAPTCHA_LOCK:
+        key = (chat_id, user_id)
+        if key not in pending_captcha:
+            return False
+        
+        correct = pending_captcha[key]['answer']
+        if int(answer) == correct:
+            del pending_captcha[key]
+            return True
+        return False
+
+def restrict_new_user(chat_id, user_id):
+    """Restrict new user until captcha verification"""
+    try:
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            can_send_messages=False,
+            can_send_media_messages=False,
+            can_send_other_messages=False,
+            can_add_web_page_previews=False
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Restrict new user failed: {e}")
+        return False
+
+def unrestrict_user(chat_id, user_id):
+    """Remove all restrictions from user"""
+    try:
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Unrestrict failed: {e}")
+        return False
+        
+        # ---------- XP SYSTEM (UPGRADED) ----------
+XP_COOLDOWN = 60  # seconds between XP gains
+
+def add_xp(chat_id, user_id, points=10):
+    """Add XP to user with cooldown"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT points, last_at FROM xp WHERE chat_id=? AND user_id=?",
+                  (str(chat_id), str(user_id)))
+        row = c.fetchone()
+        
+        now = now_ts()
+        if row:
+            if now - row['last_at'] < XP_COOLDOWN:
+                conn.close()
+                return False, 0  # Cooldown active
+            new_points = row['points'] + points
+            c.execute("UPDATE xp SET points=?, last_at=? WHERE chat_id=? AND user_id=?",
+                      (new_points, now, str(chat_id), str(user_id)))
+        else:
+            c.execute("INSERT INTO xp (chat_id, user_id, points, last_at) VALUES (?,?,?,?)",
+                      (str(chat_id), str(user_id), points, now))
+            new_points = points
+        
+        conn.commit()
+        conn.close()
+        return True, new_points
+    except Exception as e:
+        logging.warning(f"Add XP failed: {e}")
+        return False, 0
+
+def get_user_rank(chat_id, user_id):
+    """Get user's rank and XP"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT points FROM xp WHERE chat_id=? AND user_id=?",
+                  (str(chat_id), str(user_id)))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return 0, 0
+        
+        points = row['points']
+        c.execute("""SELECT COUNT(*) as rank FROM xp 
+                     WHERE chat_id=? AND points > ?""",
+                  (str(chat_id), points))
+        rank = c.fetchone()['rank'] + 1
+        conn.close()
+        return rank, points
+    except:
+        return 0, 0
+
+def get_top_users(chat_id, limit=10):
+    """Get top users by XP"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("""SELECT user_id, points FROM xp 
+                     WHERE chat_id=? 
+                     ORDER BY points DESC LIMIT ?""",
+                  (str(chat_id), limit))
+        rows = c.fetchall()
+        conn.close()
+        return [(row['user_id'], row['points']) for row in rows]
+    except:
+        return []
+
+# ---------- BACKGROUND WORKERS (UPGRADED) ----------
+
+def captcha_expiry_worker():
+    """Background worker to auto-kick users who don't solve captcha"""
+    TIMEOUT = 180  # 3 minutes
+    while True:
+        try:
+            time.sleep(30)  # Check every 30 seconds
+            with CAPTCHA_LOCK:
+                now = now_ts()
+                to_remove = []
+                for (chat_id, user_id), data in pending_captcha.items():
+                    if now - data['created_at'] > TIMEOUT:
+                        try:
+                            bot.ban_chat_member(chat_id, user_id)
+                            bot.unban_chat_member(chat_id, user_id)
+                            bot.send_message(chat_id, 
+                                           f"⏰ Captcha timeout - User {user_id} kicked")
+                            to_remove.append((chat_id, user_id))
+                            log_action(chat_id, user_id, "captcha_timeout")
+                        except:
+                            pass
+                
+                for key in to_remove:
+                    if key in pending_captcha:
+                        del pending_captcha[key]
+        except Exception as e:
+            logging.warning(f"Captcha worker error: {e}")
+
+def auto_clean_worker():
+    """Background worker to auto-delete scheduled messages"""
+    while True:
+        try:
+            time.sleep(10)  # Check every 10 seconds
+            with AUTO_CLEAN_LOCK:
+                now = now_ts()
+                to_remove = []
+                for item in AUTO_CLEAN_QUEUE:
+                    chat_id, msg_id, delete_at = item
+                    if now >= delete_at:
+                        try:
+                            bot.delete_message(chat_id, msg_id)
+                            to_remove.append(item)
+                        except:
+                            to_remove.append(item)  # Remove even if delete fails
+                
+                for item in to_remove:
+                    AUTO_CLEAN_QUEUE.remove(item)
+        except Exception as e:
+            logging.warning(f"Auto clean worker error: {e}")
+
+def sched_worker():
+    """Background worker for scheduled tasks"""
+    while True:
+        try:
+            time.sleep(60)  # Check every minute
+            # Add scheduled task logic here
+            # Example: Check notes with expires_at and delete expired ones
+            conn = db()
+            c = conn.cursor()
+            now = now_ts()
+            c.execute("DELETE FROM notes WHERE expires_at > 0 AND expires_at < ?", (now,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.warning(f"Scheduler worker error: {e}")
+
+# Start background workers as daemon threads
+captcha_thread = Thread(target=captcha_expiry_worker, daemon=True)
+captcha_thread.start()
+
+auto_clean_thread = Thread(target=auto_clean_worker, daemon=True)
+auto_clean_thread.start()
+
+sched_thread = Thread(target=sched_worker, daemon=True)
+sched_thread.start()
+
+logging.info("✅ Background workers started")
+
+# ---------- MENU SYSTEM (UPGRADED) ----------
+
+def build_role_buttons(chat_id, command):
+    """Build role selection buttons (Nobody/Admin/All)"""
+    roles = roles_get(chat_id)
+    current = roles.get(command, 'all')
+    
+    buttons = []
+    for role_type in ['nobody', 'admin', 'all']:
+        emoji = '✅' if current == role_type else ''
+        label = _(chat_id, role_type)
+        if emoji:
+            label = f"{emoji} {label}"
+        buttons.append(types.InlineKeyboardButton(
+            label, callback_data=f"role:{command}:{role_type}"
+        ))
+    return buttons
+
+def build_toggle_button(chat_id, setting_key, current_value):
+    """Build enable/disable toggle button"""
+    if current_value:
+        label = f"✅ {_(chat_id, 'enabled')}"
+        callback = f"toggle:{setting_key}:0"
+    else:
+        label = f"❌ {_(chat_id, 'disabled')}"
+        callback = f"toggle:{setting_key}:1"
+    return types.InlineKeyboardButton(label, callback_data=callback)
+
+def send_menu(chat_id, message_id=None, menu_type='main'):
+    """Send or edit menu with inline buttons"""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    if menu_type == 'main':
+        text = f"🏠 <b>{_(chat_id, 'main_menu')}</b>
+
+Select an option:"
+        markup.add(
+            types.InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings"),
+            types.InlineKeyboardButton("👥 Users", callback_data="menu:users"),
+            types.InlineKeyboardButton("🔐 Locks", callback_data="menu:locks"),
+            types.InlineKeyboardButton("📝 Notes", callback_data="menu:notes"),
+            types.InlineKeyboardButton("🤖 Triggers", callback_data="menu:triggers"),
+            types.InlineKeyboardButton("🎯 XP System", callback_data="menu:xp"),
+            types.InlineKeyboardButton("📊 Polls", callback_data="menu:polls"),
+            types.InlineKeyboardButton("🚫 Blacklist", callback_data="menu:blacklist"),
+            types.InlineKeyboardButton("🔧 Commands", callback_data="menu:commands"),
+            types.InlineKeyboardButton("💾 Backup/Restore", callback_data="menu:backup"),
+        )
+    
+    elif menu_type == 'settings':
+        settings = get_settings(chat_id)
+        text = "⚙️ <b>Settings</b>
+
+"
+        text += f"🌐 Language: <code>{settings.get('lang', 'hi')}</code>
+"
+        text += f"⏱ Flood Window: <code>{settings.get('flood_window', 15)}s</code>
+"
+        text += f"🚨 Flood Limit: <code>{settings.get('flood_limit', 7)} msgs</code>
+"
+        
+        markup.add(
+            build_toggle_button(chat_id, 'welcome_enabled', settings.get('welcome_enabled', 1)),
+            build_toggle_button(chat_id, 'leave_enabled', settings.get('leave_enabled', 1)),
+            build_toggle_button(chat_id, 'blacklist_enabled', settings.get('blacklist_enabled', 1)),
+        )
+        markup.add(
+            types.InlineKeyboardButton("🌐 Change Language", callback_data="setting:lang"),
+            types.InlineKeyboardButton("⏱ Flood Settings", callback_data="setting:flood"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'locks':
+        locks = locks_get(chat_id)
+        text = "🔐 <b>Locks</b>
+
+Toggle content restrictions:"
+        
+        markup.add(
+            build_toggle_button(chat_id, 'lock_urls', locks.get('urls', False)),
+            build_toggle_button(chat_id, 'lock_photos', locks.get('photos', False)),
+            build_toggle_button(chat_id, 'lock_videos', locks.get('videos', False)),
+            build_toggle_button(chat_id, 'lock_stickers', locks.get('stickers', False)),
+            build_toggle_button(chat_id, 'lock_forwards', locks.get('forwards', False)),
+            build_toggle_button(chat_id, 'lock_documents', locks.get('documents', False)),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'commands':
+        text = "🔧 <b>Command Permissions</b>
+
+Set who can use each command:"
+        
+        commands = ['warn', 'mute', 'ban', 'kick', 'note', 'trigger', 'poll']
+        for cmd in commands:
+            markup.add(
+                types.InlineKeyboardButton(f"/{cmd}", callback_data=f"cmd_perm:{cmd}"),
+            )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type.startswith('cmd_perm:'):
+        cmd = menu_type.split(':', 1)[1]
+        text = f"🔧 <b>Permission for /{cmd}</b>
+
+Select access level:"
+        
+        buttons = build_role_buttons(chat_id, cmd)
+        markup.add(*buttons)
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:commands"))
+    
+    elif menu_type == 'notes':
+        text = "📝 <b>Notes</b>
+
+Manage saved notes:"
+        markup.add(
+            types.InlineKeyboardButton("➕ Add Note", callback_data="note:add"),
+            types.InlineKeyboardButton("📋 List Notes", callback_data="note:list"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'triggers':
+        text = "🤖 <b>Auto Triggers</b>
+
+Manage auto-reply triggers:"
+        markup.add(
+            types.InlineKeyboardButton("➕ Add Trigger", callback_data="trigger:add"),
+            types.InlineKeyboardButton("📋 List Triggers", callback_data="trigger:list"),
+            types.InlineKeyboardButton("🧪 Test Regex", callback_data="trigger:test"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'xp':
+        text = "🎯 <b>XP System</b>
+
+Manage experience points:"
+        markup.add(
+            types.InlineKeyboardButton("🏆 Leaderboard", callback_data="xp:top"),
+            types.InlineKeyboardButton("📊 My Rank", callback_data="xp:rank"),
+            types.InlineKeyboardButton("⚙️ XP Settings", callback_data="xp:settings"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'polls':
+        text = "📊 <b>Polls</b>
+
+Create and manage polls:"
+        markup.add(
+            types.InlineKeyboardButton("➕ Create Poll", callback_data="poll:create"),
+            types.InlineKeyboardButton("📋 Active Polls", callback_data="poll:list"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'blacklist':
+        text = "🚫 <b>Blacklist</b>
+
+Manage banned words:"
+        markup.add(
+            types.InlineKeyboardButton("➕ Add Word", callback_data="blacklist:add"),
+            types.InlineKeyboardButton("📋 List Words", callback_data="blacklist:list"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    elif menu_type == 'backup':
+        text = "💾 <b>Backup & Restore</b>
+
+Manage bot data:"
+        markup.add(
+            types.InlineKeyboardButton("📤 Export Backup", callback_data="backup:export"),
+            types.InlineKeyboardButton("📥 Import Backup", callback_data="backup:import"),
+        )
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    else:
+        text = "❌ Unknown menu"
+        markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:main"))
+    
+    # Send or edit message
+    try:
+        if message_id:
+            bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
+    except Exception as e:
+        logging.warning(f"Send menu failed: {e}")
+        
+        # ---------- CALLBACK QUERY HANDLER (UPGRADED) ----------
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    """Handle all inline button callbacks"""
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    data = call.data
+    msg_id = call.message.message_id
+    
+    # Admin check for most actions
+    if not data.startswith(('xp:rank', 'xp:top', 'poll:vote')):
+        if not is_admin_member(chat_id, user_id):
+            bot.answer_callback_query(call.id, _(chat_id, 'admin_only'), show_alert=True)
+            return
+    
+    try:
+        # Menu navigation
+        if data.startswith('menu:'):
+            menu_type = data.split(':', 1)[1]
+            send_menu(chat_id, msg_id, menu_type)
+            bot.answer_callback_query(call.id)
+        
+        # Command permission toggle
+        elif data.startswith('cmd_perm:'):
+            cmd = data.split(':', 1)[1]
+            send_menu(chat_id, msg_id, f'cmd_perm:{cmd}')
+            bot.answer_callback_query(call.id)
+        
+        # Role change
+        elif data.startswith('role:'):
+            parts = data.split(':')
+            cmd, role = parts[1], parts[2]
+            roles = roles_get(chat_id)
+            roles[cmd] = role
+            roles_set(chat_id, roles)
+            send_menu(chat_id, msg_id, f'cmd_perm:{cmd}')
+            bot.answer_callback_query(call.id, _(chat_id, 'setting_updated'), show_alert=True)
+        
+        # Toggle settings
+        elif data.startswith('toggle:'):
+            parts = data.split(':')
+            key, value = parts[1], int(parts[2])
+            
+            if key.startswith('lock_'):
+                lock_type = key.replace('lock_', '')
+                locks = locks_get(chat_id)
+                locks[lock_type] = bool(value)
+                locks_set(chat_id, locks)
+                send_menu(chat_id, msg_id, 'locks')
+            else:
+                set_setting(chat_id, key, value)
+                send_menu(chat_id, msg_id, 'settings')
+            
+            bot.answer_callback_query(call.id, _(chat_id, 'setting_updated'))
+        
+        # Note actions
+        elif data.startswith('note:'):
+            action = data.split(':', 1)[1]
+            if action == 'add':
+                STATE[(chat_id, 'note_add')] = {'user_id': user_id}
+                bot.edit_message_text(
+                    "📝 Note का नाम भेजें (key):",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+            elif action == 'list':
+                conn = db()
+                c = conn.cursor()
+                c.execute("SELECT key FROM notes WHERE chat_id=? LIMIT 20", (str(chat_id),))
+                notes = [row['key'] for row in c.fetchall()]
+                conn.close()
+                if notes:
+                    text = "📝 <b>Saved Notes:</b>
+
+" + "
+".join(f"• <code>{n}</code>" for n in notes)
+                    text += f"
+
+<i>Total: {len(notes)}</i>"
+                else:
+                    text = "📝 कोई notes नहीं हैं।"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:notes"))
+                bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+        
+        # Trigger actions
+        elif data.startswith('trigger:'):
+            action = data.split(':', 1)[1]
+            if action == 'add':
+                STATE[(chat_id, 'trigger_add')] = {'user_id': user_id, 'step': 'pattern'}
+                bot.edit_message_text(
+                    "🤖 Trigger pattern भेजें:",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+            elif action == 'list':
+                conn = db()
+                c = conn.cursor()
+                c.execute("SELECT pattern, reply FROM triggers WHERE chat_id=? LIMIT 10", 
+                         (str(chat_id),))
+                triggers = c.fetchall()
+                conn.close()
+                if triggers:
+                    text = "🤖 <b>Active Triggers:</b>
+
+"
+                    for t in triggers:
+                        text += f"• {safe_html(t['pattern'][:30])} → {safe_html(t['reply'][:30])}
+"
+                else:
+                    text = "🤖 कोई triggers नहीं हैं।"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:triggers"))
+                bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+            elif action == 'test':
+                STATE[(chat_id, 'trigger_test')] = {'user_id': user_id}
+                bot.edit_message_text(
+                    "🧪 Test करने के लिए text भेजें:",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+        
+        # XP actions
+        elif data.startswith('xp:'):
+            action = data.split(':', 1)[1]
+            if action == 'rank':
+                rank, xp = get_user_rank(chat_id, user_id)
+                name = get_user_display_name(call.from_user)
+                text = _(chat_id, 'rank_display', name=name, rank=rank, xp=xp)
+                bot.answer_callback_query(call.id, text, show_alert=True)
+            elif action == 'top':
+                top = get_top_users(chat_id, 10)
+                text = "🏆 <b>Top 10 Users:</b>
+
+"
+                for i, (uid, pts) in enumerate(top, 1):
+                    try:
+                        member = bot.get_chat_member(chat_id, uid)
+                        name = get_user_display_name(member.user)
+                    except:
+                        name = f"User {uid}"
+                    text += f"{i}. {safe_html(name)} - {pts} XP
+"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:xp"))
+                bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+        
+        # Poll actions
+        elif data.startswith('poll:'):
+            action = data.split(':', 1)[1]
+            if action == 'create':
+                STATE[(chat_id, 'poll_create')] = {'user_id': user_id, 'step': 'question'}
+                bot.edit_message_text(
+                    "📊 Poll का question भेजें:",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+            elif action == 'list':
+                conn = db()
+                c = conn.cursor()
+                c.execute("SELECT id, question FROM polls WHERE chat_id=? AND open=1 LIMIT 10",
+                         (str(chat_id),))
+                polls = c.fetchall()
+                conn.close()
+                if polls:
+                    text = "📊 <b>Active Polls:</b>
+
+"
+                    for p in polls:
+                        text += f"• {safe_html(p['question'][:50])}
+"
+                else:
+                    text = "📊 कोई active polls नहीं हैं।"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:polls"))
+                bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+        
+        # Blacklist actions
+        elif data.startswith('blacklist:'):
+            action = data.split(':', 1)[1]
+            if action == 'add':
+                STATE[(chat_id, 'blacklist_add')] = {'user_id': user_id}
+                bot.edit_message_text(
+                    "🚫 Blacklist करने के लिए word भेजें:",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+            elif action == 'list':
+                conn = db()
+                c = conn.cursor()
+                c.execute("SELECT word FROM blacklist WHERE chat_id=? LIMIT 20", (str(chat_id),))
+                words = [row['word'] for row in c.fetchall()]
+                conn.close()
+                if words:
+                    text = "🚫 <b>Blacklisted Words:</b>
+
+" + "
+".join(f"• <code>{w}</code>" for w in words)
+                else:
+                    text = "🚫 कोई blacklisted words नहीं हैं।"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(_(chat_id, 'back'), callback_data="menu:blacklist"))
+                bot.edit_message_text(text, chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id)
+        
+        # Backup actions
+        elif data.startswith('backup:'):
+            action = data.split(':', 1)[1]
+            if action == 'export':
+                bot.answer_callback_query(call.id, "📤 Creating backup...")
+                backup_data = export_backup(chat_id)
+                bot.send_message(chat_id, f"<code>{backup_data}</code>")
+            elif action == 'import':
+                STATE[(chat_id, 'backup_import')] = {'user_id': user_id}
+                bot.edit_message_text(
+                    "📥 Backup JSON को reply करें:",
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id)
+        
+        # Captcha verification
+        elif data.startswith('captcha:'):
+            answer = data.split(':', 1)[1]
+            if verify_captcha(chat_id, user_id, answer):
+                unrestrict_user(chat_id, user_id)
+                name = get_user_mention(call.from_user)
+                bot.edit_message_text(
+                    _(chat_id, 'captcha_success', name=name),
+                    chat_id, msg_id
+                )
+                bot.answer_callback_query(call.id, "✅ Verified!")
+            else:
+                bot.answer_callback_query(call.id, _(chat_id, 'captcha_failed'), show_alert=True)
+        
+        else:
+            bot.answer_callback_query(call.id, "❓ Unknown action")
+    
+    except Exception as e:
+        logging.warning(f"Callback error: {e}")
+        bot.answer_callback_query(call.id, _(chat_id, 'error_occurred'), show_alert=True)
+
+# ---------- COMMAND HANDLERS (UPGRADED) ----------
+
 @bot.message_handler(commands=['start'])
 def cmd_start(m):
-    chat_id = m.chat.id
-    markup = main_menu_kb(chat_id)
-    # Use send_menu with skip_cleanup and mark_start protection
-    send_menu(
-        chat_id,
-        tr(chat_id, 'start'),
-        markup,
-        skip_cleanup=True,
-        mark_start=True
-    )
-    track(chat_id, m.from_user.id, "start")
+    """Start command"""
+    if m.chat.type == 'private':
+        bot.reply_to(m, 
+            "👋 <b>Welcome!</b>
+
+"
+            "मैं एक advanced group management bot हूँ।
+"
+            "मुझे किसी group में add करें और /menu use करें।"
+        )
+    else:
+        send_menu(m.chat.id, menu_type='main')
 
 @bot.message_handler(commands=['menu'])
 def cmd_menu(m):
-    show_main(m.chat.id)
-
-@bot.message_handler(commands=['lang'])
-def cmd_lang(m):
-    chat_id = m.chat.id
-    row = get_settings(str(chat_id))
-    new = 'hi' if (row['lang'] == 'en') else 'en'
-    set_setting(str(chat_id), 'lang', new)
-    bot.reply_to(m, f"Lang: {new}")
-    track(chat_id, m.from_user.id, "lang_toggle")
-
-def kb_back(chat_id, back_cb):
-    return kb([[(tr(chat_id, 'back'), back_cb)]])
-
-def show_main(chat_id):
-    send_menu(chat_id, tr(chat_id, 'main'), main_menu_kb(chat_id), tag='main')
-
-def group_menu(chat_id):
-    menu_k = kb([
-        [("🔒 Locks", "g_locks"), ("👤 Roles", "g_roles")],
-        [("📈 Analytics", "g_stats"), ("🧪 Captcha", "g_captcha")],
-        [("🧰 Tools", "g_tools"), ("🗂️ Logs", "g_logs")],
-        [(tr(chat_id, 'back'), "back_main")]
-    ])
-    send_menu(chat_id, tr(chat_id, 'group'), menu_k, tag='group')
-
-# ---------- Callback routing ----------
-@bot.callback_query_handler(func=lambda c: True)
-def cb(call):
-    chat_id = call.message.chat.id
-    data = call.data
-
-    if data == 'back_main':
-        show_main(chat_id); return
-    if data == 'group':
-        group_menu(chat_id); return
-
-    if data == 'g_stats':
-        text = tr(chat_id, 'stats_title') + "\n\n" + stats_report(chat_id, 7) + "\n—\n" + stats_report(chat_id, 30)
-        send_menu(chat_id, text, kb_back(chat_id, 'group')); return
-
-    if data == 'welcome':
-        # toggle welcome
-        row = get_settings(str(chat_id))
-        new = 0 if row['welcome_enabled'] else 1
-        set_setting(str(chat_id), 'welcome_enabled', new)
-        send_menu(chat_id, tr(chat_id, 'welcome_on') if new else tr(chat_id, 'welcome_off'), kb_back(chat_id, 'back_main')); return
-
-    if data == 'verify':
-        send_menu(chat_id, "Verification tools ready.", kb_back(chat_id, 'back_main')); return
-
-    if data == 'triggers':
-        # open triggers menu
-        send_menu(chat_id, "Triggers menu.", kb([
-            [("Add", "TR_ADD"), ("List", "TR_LIST")],
-            [("Test regex", "TR_TEST")],
-            [(tr(chat_id, 'back'), 'back_main')]
-        ])); return
-
-    if data == 'schedule':
-        send_menu(chat_id, "Scheduler:", kb([
-            [("➕ Add", "SCH_ADD"), ("📋 List", "SCH_LIST")],
-            [(tr(chat_id, 'back'), 'back_main')]
-        ])); return
-
-    if data == 'clean':
-        # open clean menu with auto-clean controls
-        menu = menu_get(chat_id)
-        seconds = menu.get('auto_clean_seconds', 0)
-        send_menu(chat_id, f"Clean rules.\nAuto-clean: {seconds or '(off)'} sec",
-                  kb([[("Toggle Auto-Clean 30s", "CLEAN_AUTO_30"), ("Toggle Auto-Clean Off", "CLEAN_AUTO_OFF")],
-                      [(tr(chat_id, 'back'), 'back_main')]])); return
-
-    if data == 'block':
-        send_menu(chat_id, "Blacklist menu.", kb([
-            [("Add word", "BL_ADD"), ("List", "BL_LIST")],
-            [(tr(chat_id, 'back'), 'back_main')]
-        ])); return
-
-    if data == 'advanced':
-        send_menu(chat_id,
-                  "Advanced: Roles, Locks, RSS, Dumps, Federation, Subs, Polls.",
-                  kb([
-                      [("Subs", "SUBS"), ("Plugins", "PLUG")],
-                      [("Polls", "PL_MENU"), (bt(chat_id,'xp'), "XP_MENU")],
-                      [(tr(chat_id, 'back'), 'back_main')]
-                  ])); return
-
-    if data == 'XP_MENU':
-        # XP controls
-        menu = menu_get(chat_id)
-        enabled = menu.get('xp_enabled', False)
-        send_menu(chat_id, f"XP system: {'ON' if enabled else 'OFF'}",
-                  kb([[("Toggle XP", "XP_TOGGLE"), ("Top 10", "XP_TOP")],
-                      [(tr(chat_id, 'back'), 'advanced')]])); return
-
-    if data == 'g_logs' or data == 'g_logs_more':
-        # logs menu
-        menu = menu_get(chat_id)
-        target = menu.get('mod_log_target', '(none)')
-        send_menu(chat_id, f"Mod logs -> {target}", kb([[("Set target", "LOG_SET"), ("Toggle logs", "LOG_TOG")], [(tr(chat_id, 'back'), 'group')]]))
+    """Show main menu"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
         return
+    send_menu(m.chat.id, menu_type='main')
 
-    # Locks & group advanced
-    advanced_route(chat_id, data)
+@bot.message_handler(commands=['help'])
+def cmd_help(m):
+    """Show help message"""
+    text = """
+🤖 <b>Available Commands:</b>
 
-# ---------- Advanced route ----------
-def advanced_route(chat_id, key):
-    if key == 'lang':
-        row = get_settings(str(chat_id))
-        new = 'hi' if (row['lang'] == 'en') else 'en'
-        set_setting(str(chat_id), 'lang', new)
-        show_main(chat_id); return
+<b>👮 Admin Commands:</b>
+• /menu - Main menu
+• /warn @user - Warn user
+• /mute @user [duration] - Mute user
+• /ban @user - Ban user
+• /kick @user - Kick user
+• /undo @user - Undo last punishment
 
-    if key == 'g_tools':
-        send_menu(chat_id, "Tools:\n- Notes\n- Commands\n- Blacklist\n- Dumps\n- RSS",
-                  kb_back(chat_id, 'group')); return
+<b>📝 Content:</b>
+• /note <key> <content> - Save note
+• /get <key> - Get note
+• /trigger <pattern> <reply> - Add trigger
 
-    if key == 'g_locks':
-        locks = jdump(get_locks(chat_id))
-        send_menu(chat_id, f"Locks: {locks}",
-                  kb([[("URLs", "LOCK_urls_toggle"), ("Forwards", "LOCK_forwards_toggle")],
-                      [("Photos", "LOCK_photos_toggle"), ("Stickers", "LOCK_stickers_toggle")],
-                      [(tr(chat_id, 'back'), 'group')]])); return
+<b>🎯 XP System:</b>
+• /rank - Your rank & XP
+• /top - Leaderboard
 
-    if key == 'g_roles':
-        roles = jdump(get_roles(chat_id))
-        send_menu(chat_id, f"Roles: {roles}", kb_back(chat_id, 'group')); return
+<b>📊 Polls:</b>
+• /poll <question> | <opt1> | <opt2> - Create poll
 
-    if key == 'g_captcha':
-        menu = menu_get(chat_id)
-        enabled = menu.get('auto_captcha', False)
-        send_menu(chat_id, f"Captcha auto-verify on join: {'ON' if enabled else 'OFF'}",
-                  kb([[("Toggle Captcha", "CAP_TOG")], [(tr(chat_id, 'back'), 'group')]])); return
+<b>💾 Backup:</b>
+• /backup - Export data
+• /restore - Import data (reply to backup)
 
-    if key == 'g_dumps':
-        send_menu(chat_id, "Dumps: toggle and set forward target.",
-                  kb([[("Toggle", "DUMP_T"), ("Set target", "DUMP_S")],
-                      [(tr(chat_id, 'back'), 'group')]])); return
+<b>🔧 Settings:</b>
+• /lang <hi/en> - Change language
+• /locks - View locks status
+"""
+    bot.reply_to(m, text)
 
-    if key == 'PL_MENU':
-        send_menu(chat_id, "Polls:",
-                  kb([[("➕ New", "PL_NEW"), ("📋 List", "PL_LIST")],
-                      [(tr(chat_id, 'back'), 'advanced')]])); return
-
-    if key == 'XP_TOGGLE':
-        menu = menu_get(chat_id)
-        menu['xp_enabled'] = not menu.get('xp_enabled', False)
-        menu_set(chat_id, menu)
-        send_menu(chat_id, "XP toggled.", kb_back(chat_id, 'advanced')); return
-
-    if key == 'XP_TOP':
-        # compute top 10 from xp table
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC LIMIT 10", (str(chat_id),))
-        rows = c.fetchall(); conn.close()
-        if rows:
-            text = "Top XP:\n" + "\n".join(f"{i+1}. {r['user_id']} — {r['points']}" for i, r in enumerate(rows))
-        else:
-            text = "No XP yet."
-        send_menu(chat_id, text, kb_back(chat_id, 'advanced')); return
-
-    if key == 'CAP_TOG':
-        menu = menu_get(chat_id)
-        menu['auto_captcha'] = not menu.get('auto_captcha', False)
-        menu_set(chat_id, menu)
-        send_menu(chat_id, f"Auto-captcha: {'ON' if menu['auto_captcha'] else 'OFF'}", kb_back(chat_id, 'group')); return
-
-    if key == 'LOCK_urls_toggle':
-        locks = get_locks(chat_id)
-        locks['urls'] = 0 if locks.get('urls') else 1
-        set_locks(chat_id, locks)
-        send_menu(chat_id, f"Lock urls: {'on' if locks['urls'] else 'off'}", kb_back(chat_id, 'group')); return
-
-    if key == 'LOCK_forwards_toggle':
-        locks = get_locks(chat_id)
-        locks['forwards'] = 0 if locks.get('forwards') else 1
-        set_locks(chat_id, locks)
-        send_menu(chat_id, f"Lock forwards: {'on' if locks['forwards'] else 'off'}", kb_back(chat_id, 'group')); return
-
-    if key == 'LOCK_photos_toggle':
-        locks = get_locks(chat_id)
-        locks['photos'] = 0 if locks.get('photos') else 1
-        set_locks(chat_id, locks)
-        send_menu(chat_id, f"Lock photos: {'on' if locks['photos'] else 'off'}", kb_back(chat_id, 'group')); return
-
-    if key == 'LOCK_stickers_toggle':
-        locks = get_locks(chat_id)
-        locks['stickers'] = 0 if locks.get('stickers') else 1
-        set_locks(chat_id, locks)
-        send_menu(chat_id, f"Lock stickers: {'on' if locks['stickers'] else 'off'}", kb_back(chat_id, 'group')); return
-
-# ---------- Roles & Locks ----------
-def get_roles(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['roles_json'], {}) or {}
-
-def set_roles(chat_id, roles):
-    set_setting(str(chat_id), 'roles_json', jdump(roles))
-
-def get_locks(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['locks_json'], {}) or {}
-
-def set_locks(chat_id, locks):
-    set_setting(str(chat_id), 'locks_json', jdump(locks))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("LOCK_"))
-def cb_lock(call):
-    chat_id = call.message.chat.id
-    try:
-        # data format: LOCK_<feature>_<onoff> OR handled earlier
-        _, feature, onoff = call.data.split("_", 3)
-    except Exception:
+@bot.message_handler(commands=['warn'])
+def cmd_warn(m):
+    """Warn a user"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
         return
-    locks = get_locks(chat_id)
-    locks[feature] = 1 if onoff == 'on' else 0
-    set_locks(chat_id, locks)
-    send_menu(chat_id,
-              f"Lock {feature}: {'on' if locks[feature] else 'off'}",
-              kb([[("Links on", "LOCK_links_on"), ("Links off", "LOCK_links_off")],
-                  [(tr(chat_id, 'back'), 'group')]]))
-
-# ---------- Captcha helpers ----------
-def captcha_new():
-    a, b = random.randint(3, 12), random.randint(3, 12)
-    return f"{a}+{b}=?", a + b
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("CAP_AUTO_"))
-def cb_cap_auto(call):
-    # Format: CAP_AUTO_<chat_id>_<user_id>
-    try:
-        _, _, chat_s, user_s = call.data.split("_", 3)
-        chat_id = int(chat_s); user_id = int(user_s)
-    except Exception:
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'warn'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
         return
-    key = (chat_id, user_id)
-    if key in pending_captcha and call.from_user.id == user_id:
-        # verified
-        pending_captcha.pop(key, None)
-        send_menu(chat_id, f"Verified ✅ {call.from_user.first_name}", kb_back(chat_id, 'group'))
-        track(chat_id, user_id, "captcha_pass")
+    
+    target = None
+    if m.reply_to_message:
+        target = m.reply_to_message.from_user
     else:
-        send_menu(chat_id, "No pending captcha or wrong user.", kb_back(chat_id, 'group'))
-
-@bot.callback_query_handler(func=lambda c: c.data == "CAP_TOG")
-def cb_cap_toggle(call):
-    chat_id = call.message.chat.id
-    advanced_route(chat_id, 'CAP_TOG')
-
-@bot.callback_query_handler(func=lambda c: c.data == "CAP_GEN")
-def cb_cap_gen(call):
-    chat_id = call.message.chat.id
-    q, ans = captcha_new()
-    pending_captcha[(chat_id, call.from_user.id)] = ans
-    send_menu(chat_id, f"Solve: {q}",
-              kb([[("Submit ✅", "CAP_OK")],
-                  [(tr(chat_id, 'back'), 'g_captcha')]]))
-
-@bot.callback_query_handler(func=lambda c: c.data == "CAP_OK")
-def cb_cap_ok(call):
-    chat_id = call.message.chat.id
-    key = (chat_id, call.from_user.id)
-    if key in pending_captcha:
-        pending_captcha.pop(key, None)
-        send_menu(chat_id, "Verified ✅", kb_back(chat_id, 'g_captcha'))
-        track(chat_id, call.from_user.id, "captcha_pass")
-    else:
-        send_menu(chat_id, "No pending captcha.", kb_back(chat_id, 'g_captcha'))
-
-# ---------- Blacklist UI ----------
-@bot.callback_query_handler(func=lambda c: c.data in ("BL_ADD", "BL_LIST"))
-def cb_blacklist_menu(call):
-    chat_id = call.message.chat.id
-    if call.data == "BL_ADD":
-        STATE[(chat_id, "await_bl")] = True
-        send_menu(chat_id, "Word bhejo (chat me type karo).", kb_back(chat_id, 'block'))
-    else:
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-        rows = c.fetchall(); conn.close()
-        words = ", ".join(r['word'] for r in rows) if rows else "(empty)"
-        send_menu(chat_id, f"Blacklist: {words}", kb_back(chat_id, 'block'))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_bl")) and bool(m.text))
-def bl_add_text(m):
-    chat_id = m.chat.id
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(chat_id), m.text.strip()))
-    conn.commit(); conn.close()
-    STATE.pop((chat_id, "await_bl"), None)
-    bot.reply_to(m, "Added to blacklist.")
-
-# ---------- Triggers UI (enhanced: edit/delete) ----------
-@bot.callback_query_handler(func=lambda c: c.data in ("TR_ADD", "TR_LIST", "TR_TEST"))
-def cb_triggers(call):
-    chat_id = call.message.chat.id
-    if call.data == "TR_ADD":
-        STATE[(chat_id, "await_tr_pat")] = {'is_regex': 0}
-        send_menu(chat_id, "Trigger keyword ya /regex:<pattern> bhejo.", kb_back(chat_id, 'triggers'))
-    elif call.data == "TR_LIST":
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT id, pattern, is_regex FROM triggers WHERE chat_id=?", (str(chat_id),))
-        rows = c.fetchall(); conn.close()
-        if rows:
-            # present each trigger with edit/delete buttons
-            for r in rows:
-                pid = r['id']; pat = ('/regex:' if r['is_regex'] else '') + r['pattern']
-                send_menu(chat_id, f"#{pid} {pat}",
-                          kb([[("Edit", f"TR_EDIT_{pid}"), ("Delete", f"TR_DEL_{pid}")],
-                              [(tr(chat_id, 'back'), 'triggers')]]))
-        else:
-            send_menu(chat_id, "No triggers.", kb_back(chat_id, 'triggers'))
-    else:
-        STATE[(chat_id, "await_regex_test")] = {'step': 1}
-        send_menu(chat_id, "Regex दर्ज करें. Example: ^hello$", kb_back(chat_id, 'triggers'))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("TR_EDIT_"))
-def cb_tr_edit(call):
-    try:
-        pid = int(call.data.split("_")[-1])
-    except:
+        args = m.text.split(maxsplit=1)
+        if len(args) > 1 and args[1].startswith('@'):
+            # Try to find user by username
+            pass
+    
+    if not target:
+        bot.reply_to(m, 
+            "❌ Reply to user या username mention करें।
+"
+            f"{_(m.chat.id, 'usage', usage='/warn @user')}"
+        )
         return
-    STATE[(call.message.chat.id, "await_tr_edit")] = pid
-    send_menu(call.message.chat.id, "Send new reply text for this trigger.", kb_back(call.message.chat.id, 'triggers'))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("TR_DEL_"))
-def cb_tr_del(call):
-    try:
-        pid = int(call.data.split("_")[-1])
-    except:
-        return
-    conn = db(); c = conn.cursor()
-    c.execute("DELETE FROM triggers WHERE id=?",(pid,))
-    conn.commit(); conn.close()
-    send_menu(call.message.chat.id, "Deleted.", kb_back(call.message.chat.id, 'triggers'))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_tr_pat")))
-def tr_add_flow(m):
-    chat_id = m.chat.id
-    data = STATE.get((chat_id, "await_tr_pat"))
-    txt = m.text.strip()
-    is_regex = 0
-    if txt.startswith("/regex:"):
-        is_regex = 1
-        txt = txt[len("/regex:"):].strip()
-        try:
-            re.compile(txt)
-        except re.error:
-            bot.reply_to(m, "Regex invalid.")
-            return
-    STATE[(chat_id, "await_tr_rep")] = {'pattern': txt, 'is_regex': is_regex}
-    STATE.pop((chat_id, "await_tr_pat"), None)
-    bot.reply_to(m, "Reply text bhejo.")
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_tr_rep")))
-def tr_add_reply(m):
-    chat_id = m.chat.id
-    step = STATE.pop((chat_id, "await_tr_rep"))
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO triggers(chat_id,pattern,reply,is_regex) VALUES(?,?,?,?)",
-              (str(chat_id), step['pattern'], m.text.strip(), step['is_regex']))
-    conn.commit(); conn.close()
-    bot.reply_to(m, "Trigger added.")
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_tr_edit")) and bool(m.text))
-def tr_edit_apply(m):
-    chat_id = m.chat.id
-    pid = STATE.pop((chat_id, "await_tr_edit"))
-    conn = db(); c = conn.cursor()
-    c.execute("UPDATE triggers SET reply=? WHERE id=? AND chat_id=?", (m.text.strip(), pid, str(chat_id)))
-    conn.commit(); conn.close()
-    bot.reply_to(m, "Trigger updated.")
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_regex_test")) and bool(m.text))
-def tr_test_flow(m):
-    chat_id = m.chat.id
-    st = STATE.get((chat_id, "await_regex_test"))
-    if st['step'] == 1:
-        pattern = m.text.strip()
-        try:
-            re.compile(pattern)
-        except re.error as e:
-            bot.reply_to(m, f"Invalid regex: {e}"); return
-        st['pattern'] = pattern; st['step'] = 2
-        STATE[(chat_id, "await_regex_test")] = st
-        bot.reply_to(m, "Test text भेजें.")
+    
+    count, status = warn_user(m.chat.id, target.id)
+    name = get_user_mention(target)
+    
+    if status == 'banned':
+        msg = _(m.chat.id, 'user_banned', user=name)
     else:
-        pattern = st['pattern']; text = m.text
-        try:
-            ok = bool(re.search(pattern, text, flags=re.I))
-            bot.reply_to(m, f"Match: {'YES' if ok else 'NO'}")
-        except re.error as e:
-            bot.reply_to(m, f"Error: {e}")
-        STATE.pop((chat_id, "await_regex_test"), None)
+        msg = _(m.chat.id, 'user_warned', user=name, count=count)
+    
+    bot.reply_to(m, msg)
+    forward_log(m.chat.id, f"Warned {target.id} by {m.from_user.id}")
 
-# ---------- Notes ---------- (unchanged) ----------
+@bot.message_handler(commands=['mute'])
+def cmd_mute(m):
+    """Mute a user"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'mute'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    target = None
+    duration = 3600  # default 1 hour
+    
+    if m.reply_to_message:
+        target = m.reply_to_message.from_user
+        args = m.text.split()
+        if len(args) > 1:
+            try:
+                duration = int(args[1]) * 60  # minutes to seconds
+            except:
+                pass
+    
+    if not target:
+        bot.reply_to(m, 
+            "❌ Reply to user करें।
+"
+            f"{_(m.chat.id, 'usage', usage='/mute @user [minutes]')}"
+        )
+        return
+    
+    if mute_user(m.chat.id, target.id, duration):
+        name = get_user_mention(target)
+        duration_str = f"{duration//60}m" if duration < 3600 else f"{duration//3600}h"
+        bot.reply_to(m, _(m.chat.id, 'user_muted', user=name, duration=duration_str))
+        forward_log(m.chat.id, f"Muted {target.id} for {duration}s by {m.from_user.id}")
+    else:
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['ban'])
+def cmd_ban(m):
+    """Ban a user"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'ban'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    target = None
+    if m.reply_to_message:
+        target = m.reply_to_message.from_user
+    
+    if not target:
+        bot.reply_to(m, 
+            "❌ Reply to user करें।
+"
+            f"{_(m.chat.id, 'usage', usage='/ban @user')}"
+        )
+        return
+    
+    if ban_user(m.chat.id, target.id, "manual ban"):
+        name = get_user_mention(target)
+        bot.reply_to(m, _(m.chat.id, 'user_banned', user=name))
+        forward_log(m.chat.id, f"Banned {target.id} by {m.from_user.id}")
+    else:
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['kick'])
+def cmd_kick(m):
+    """Kick a user"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'kick'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    target = None
+    if m.reply_to_message:
+        target = m.reply_to_message.from_user
+    
+    if not target:
+        bot.reply_to(m, 
+            "❌ Reply to user करें।
+"
+            f"{_(m.chat.id, 'usage', usage='/kick @user')}"
+        )
+        return
+    
+    if kick_user(m.chat.id, target.id):
+        name = get_user_mention(target)
+        bot.reply_to(m, _(m.chat.id, 'user_kicked', user=name))
+        forward_log(m.chat.id, f"Kicked {target.id} by {m.from_user.id}")
+    else:
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['undo'])
+def cmd_undo(m):
+    """Undo last punishment"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    target = None
+    if m.reply_to_message:
+        target = m.reply_to_message.from_user
+    
+    if not target:
+        bot.reply_to(m, "❌ Reply to user करें।")
+        return
+    
+    success, result = undo_punishment(m.chat.id, target.id)
+    if success:
+        name = get_user_mention(target)
+        bot.reply_to(m, f"✅ {name} का {result} punishment undo हो गया।")
+    else:
+        bot.reply_to(m, f"❌ {result}")
+        
+        # ---------- NOTE COMMANDS ----------
 @bot.message_handler(commands=['note'])
 def cmd_note(m):
-    parts = m.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /note key content"); return
-    key, content = parts[1], parts[2]
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO notes(chat_id,key,content,created_at,expires_at) VALUES(?,?,?,?,?)",
-              (str(m.chat.id), key, content, now_ts(), 0))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Saved note: {key}")
+    """Save a note"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'note'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    args = m.text.split(maxsplit=2)
+    if len(args) < 3:
+        bot.reply_to(m, 
+            f"❌ Format गलत है।
+"
+            f"{_(m.chat.id, 'usage', usage='/note <key> <content>')}"
+        )
+        return
+    
+    key = args[1]
+    content = args[2]
+    
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO notes (chat_id, key, content, created_at) VALUES (?,?,?,?)",
+                  (str(m.chat.id), key, content, now_ts()))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, _(m.chat.id, 'note_added', key=key))
+        log_action(m.chat.id, m.from_user.id, f"note_added:{key}")
+    except Exception as e:
+        logging.warning(f"Save note failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
 
 @bot.message_handler(commands=['get'])
 def cmd_get(m):
-    parts = m.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: /get key"); return
-    key = parts[1]
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT content FROM notes WHERE chat_id=? AND key=? ORDER BY id DESC LIMIT 1",
-              (str(m.chat.id), key))
-    row = c.fetchone(); conn.close()
-    bot.reply_to(m, row['content'] if row else "Not found")
-
-# ---------- Custom commands ----------
-@bot.message_handler(func=lambda m: m.text and m.text.startswith('!'))
-def custom_cmd(m):
-    cmd = m.text.split()[0][1:].lower()
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT body FROM commands WHERE chat_id=? AND cmd=?", (str(m.chat.id), cmd))
-    row = c.fetchone(); conn.close()
-    if row:
-        bot.reply_to(m, row['body'])
-
-@bot.message_handler(commands=['addcmd'])
-def cmd_addcmd(m):
-    parts = m.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /addcmd name body"); return
-    name, body = parts[1].lower(), parts[2]
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO commands(chat_id,cmd,body) VALUES(?,?,?)", (str(m.chat.id), name, body))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Added command: !{name}")
-
-# ---------- Admin-only guard ----------
-def admin_only(m):
-    if not is_admin_member(m.chat.id, m.from_user.id):
-        bot.reply_to(m, "Admin only."); return False
-    return True
-
-@bot.message_handler(commands=['lock'])
-def cmd_lock(m):
-    if not admin_only(m): return
-    parts = m.text.split()
-    if len(parts) < 3:
-        bot.reply_to(m, "Use: /lock feature on|off"); return
-    feature = parts[1].lower()
-    val = 1 if parts[2].lower() == 'on' else 0
-    locks = get_locks(m.chat.id)
-    locks[feature] = val
-    set_locks(m.chat.id, locks)
-    bot.reply_to(m, f"Lock {feature}: {'on' if val else 'off'}")
-
-# ---------- Help/About ----------
-HELP_TEXT_HI = """ℹ️ मदद
-
-- /start — मेनू खोलें
-- /menu — मेनू दिखाएँ
-- /lang — भाषा बदलें
-- /note, /get — नोट सेव/लाओ
-- /addcmd, !cmd — कस्टम कमांड
-- /blackadd, /blacklist — ब्लैकलिस्ट
-- /lock — लॉक ऑन/ऑफ
-- /export_stats — एनालिटिक्स एक्सपोर्ट
-बाक़ी सब बटन से करें."""
-HELP_TEXT_EN = """ℹ️ Help
-
-- /start — open menu
-- /menu — show menu
-- /lang — toggle language
-- /note, /get — notes save/get
-- /addcmd, !cmd — custom commands
-- /blackadd, /blacklist — blacklist
-- /lock — toggle locks
-- /export_stats — export analytics
-Use buttons for everything else."""
-
-@bot.message_handler(commands=['help', 'about'])
-def cmd_help(m):
-    row = get_settings(str(m.chat.id))
-    lang = row['lang'] if row and row['lang'] else 'hi'
-    bot.reply_to(m, HELP_TEXT_HI if lang == 'hi' else HELP_TEXT_EN)
-
-@bot.callback_query_handler(func=lambda c: c.data == "HELP")
-def cb_help(call):
-    chat_id = call.message.chat.id
-    send_menu(chat_id, "Help opened. Also try /help.", kb_back(chat_id, 'back_main'))
-
-# ---------- Debug toggle ----------
-@bot.message_handler(commands=['debug'])
-def cmd_debug(m):
-    if not is_admin_member(m.chat.id, m.from_user.id):
-        bot.reply_to(m, "Admin only."); return
-    if m.chat.id in DEBUG_CHATS:
-        DEBUG_CHATS.remove(m.chat.id); bot.reply_to(m, "Debug: off")
-    else:
-        DEBUG_CHATS.add(m.chat.id); bot.reply_to(m, "Debug: on")
-
-# ---------- RSS ----------
-def rss_get_items(url, limit=5, timeout=10):
+    """Get a note"""
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/get <key>')}")
+        return
+    
+    key = args[1]
     try:
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(req, timeout=timeout) as resp:
-            data = resp.read().decode('utf-8', 'ignore')
-        items = []
-        for item in re.findall(r'<item>(.*?)</item>', data, flags=re.I | re.S):
-            t = re.search(r'<title>(.*?)</title>', item, flags=re.I | re.S)
-            l = re.search(r'<link>(.*?)</link>', item, flags=re.I | re.S)
-            if t and l:
-                title = re.sub(r'<.*?>', '', t.group(1)).strip()
-                link = re.sub(r'<.*?>', '', l.group(1)).strip()
-                if title and link:
-                    items.append((title, link))
-            if len(items) >= limit:
-                break
-        return items
-    except Exception as e:
-        logging.warning(f"rss error: {e}")
-        return []
-
-# ---------- Federation-lite ----------
-def federation_sync(chats, payload):
-    for c in chats:
-        try:
-            bot.send_message(int(c), f"[Federation] {payload}")
-        except Exception:
-            pass
-
-@bot.message_handler(commands=['federate'])
-def cmd_federate(m):
-    parts = m.text.split()
-    if ':' not in m.text or len(parts) < 3:
-        bot.reply_to(m, "Use: /federate <chat_ids...> : <text>"); return
-    ids_part, text_part = m.text.split(':', 1)
-    chat_ids = [p for p in ids_part.split()[1:] if p.lstrip('-').isdigit()]
-    payload = text_part.strip()
-    federation_sync(chat_ids, payload)
-    bot.reply_to(m, f"Sent to {len(chat_ids)} chats.")
-
-# ---------- Blacklist commands ----------
-@bot.message_handler(commands=['blackadd'])
-def cmd_blackadd(m):
-    parts = m.text.split(maxsplit=1)
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: /blackadd word"); return
-    w = parts[1].strip()
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(m.chat.id), w))
-    conn.commit(); conn.close()
-    bot.reply_to(m, f"Blacklisted: {w}")
-
-@bot.message_handler(commands=['blacklist'])
-def cmd_blacklist(m):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(m.chat.id),))
-    rows = [r['word'] for r in c.fetchall()]; conn.close()
-    if rows:
-        text = "Blacklist:\n" + "\n".join(f"- {w}" for w in rows)
-    else:
-        text = "No words."
-    for chunk in paginate(text):
-        bot.reply_to(m, chunk)
-
-# ---------- XP / Leveling ----------
-def xp_add(chat_id, user_id, amount=1):
-    with XP_LOCK:
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT points FROM xp WHERE chat_id=? AND user_id=?", (str(chat_id), str(user_id)))
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT content FROM notes WHERE chat_id=? AND key=?", 
+                  (str(m.chat.id), key))
         row = c.fetchone()
+        conn.close()
+        
         if row:
-            pts = row['points'] + amount
-            c.execute("UPDATE xp SET points=?, last_at=? WHERE chat_id=? AND user_id=?", (pts, now_ts(), str(chat_id), str(user_id)))
+            bot.reply_to(m, safe_html(row['content']))
         else:
-            pts = amount
-            c.execute("INSERT INTO xp(chat_id,user_id,points,last_at) VALUES(?,?,?,?)", (str(chat_id), str(user_id), pts, now_ts()))
-        conn.commit(); conn.close()
-        return pts
+            bot.reply_to(m, f"❌ Note '{key}' नहीं मिला।")
+    except Exception as e:
+        logging.warning(f"Get note failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
 
-def xp_get(chat_id, user_id):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT points FROM xp WHERE chat_id=? AND user_id=?", (str(chat_id), str(user_id)))
-    row = c.fetchone(); conn.close()
-    return row['points'] if row else 0
+@bot.message_handler(commands=['delnote'])
+def cmd_delnote(m):
+    """Delete a note"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/delnote <key>')}")
+        return
+    
+    key = args[1]
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("DELETE FROM notes WHERE chat_id=? AND key=?", 
+                  (str(m.chat.id), key))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, _(m.chat.id, 'note_deleted', key=key))
+        log_action(m.chat.id, m.from_user.id, f"note_deleted:{key}")
+    except Exception as e:
+        logging.warning(f"Delete note failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
 
+# ---------- TRIGGER COMMANDS ----------
+@bot.message_handler(commands=['trigger'])
+def cmd_trigger(m):
+    """Add auto-reply trigger"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'trigger'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    args = m.text.split(maxsplit=2)
+    if len(args) < 3:
+        bot.reply_to(m, 
+            f"❌ Format गलत है।
+"
+            f"{_(m.chat.id, 'usage', usage='/trigger <pattern> <reply>')}"
+        )
+        return
+    
+    pattern = args[1]
+    reply = args[2]
+    is_regex = 0
+    
+    # Check if pattern looks like regex
+    if any(c in pattern for c in ['^', '$', '[', ']', '(', ')', '*', '+', '?', '|']):
+        is_regex = 1
+        # Test regex validity
+        try:
+            re.compile(pattern)
+        except:
+            bot.reply_to(m, "❌ Invalid regex pattern!")
+            return
+    
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO triggers (chat_id, pattern, reply, is_regex) VALUES (?,?,?,?)",
+                  (str(m.chat.id), pattern, reply, is_regex))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, _(m.chat.id, 'trigger_added'))
+        log_action(m.chat.id, m.from_user.id, f"trigger_added:{pattern}")
+    except Exception as e:
+        logging.warning(f"Add trigger failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['triggers'])
+def cmd_triggers(m):
+    """List all triggers"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT id, pattern, reply, is_regex FROM triggers WHERE chat_id=?",
+                  (str(m.chat.id),))
+        triggers = c.fetchall()
+        conn.close()
+        
+        if not triggers:
+            bot.reply_to(m, "🤖 कोई triggers नहीं हैं।")
+            return
+        
+        text = "🤖 <b>Active Triggers:</b>
+
+"
+        for t in triggers:
+            regex_mark = "🔧" if t['is_regex'] else "📝"
+            text += f"{regex_mark} <code>{t['id']}</code>: {safe_html(t['pattern'][:30])}
+"
+            text += f"   → {safe_html(t['reply'][:50])}
+
+"
+        
+        text += f"<i>Total: {len(triggers)}</i>
+"
+        text += f"
+{_(m.chat.id, 'usage', usage='/deltrigger <id>')}"
+        bot.reply_to(m, text)
+    except Exception as e:
+        logging.warning(f"List triggers failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['deltrigger'])
+def cmd_deltrigger(m):
+    """Delete a trigger"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/deltrigger <id>')}")
+        return
+    
+    try:
+        trigger_id = int(args[1])
+        conn = db()
+        c = conn.cursor()
+        c.execute("DELETE FROM triggers WHERE id=? AND chat_id=?",
+                  (trigger_id, str(m.chat.id)))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, f"✅ Trigger {trigger_id} delete हो गया।")
+        log_action(m.chat.id, m.from_user.id, f"trigger_deleted:{trigger_id}")
+    except ValueError:
+        bot.reply_to(m, "❌ Invalid trigger ID")
+    except Exception as e:
+        logging.warning(f"Delete trigger failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+# ---------- XP COMMANDS ----------
 @bot.message_handler(commands=['rank'])
 def cmd_rank(m):
-    pts = xp_get(m.chat.id, m.from_user.id)
-    bot.reply_to(m, f"Your XP: {pts}")
+    """Show user's rank and XP"""
+    rank, xp = get_user_rank(m.chat.id, m.from_user.id)
+    name = get_user_display_name(m.from_user)
+    text = _(m.chat.id, 'rank_display', name=name, rank=rank, xp=xp)
+    bot.reply_to(m, text)
 
 @bot.message_handler(commands=['top'])
 def cmd_top(m):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC LIMIT 10", (str(m.chat.id),))
-    rows = c.fetchall(); conn.close()
-    if rows:
-        text = "Top XP:\n" + "\n".join(f"{i+1}. {r['user_id']} — {r['points']}" for i, r in enumerate(rows))
-    else:
-        text = "No XP yet."
+    """Show top 10 users"""
+    top = get_top_users(m.chat.id, 10)
+    if not top:
+        bot.reply_to(m, "🏆 अभी तक कोई XP नहीं है।")
+        return
+    
+    text = "🏆 <b>Top 10 Users:</b>
+
+"
+    for i, (uid, pts) in enumerate(top, 1):
+        try:
+            member = bot.get_chat_member(m.chat.id, uid)
+            name = get_user_display_name(member.user)
+        except:
+            name = f"User {uid}"
+        
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        text += f"{medal} {safe_html(name)} - <b>{pts}</b> XP
+"
+    
     bot.reply_to(m, text)
 
-# ---------- Plugins (registry only) ----------
-def plugins_get(chat_id):
-    row = get_settings(str(chat_id))
-    return jload(row['plugins_json'], []) or []
-
-def plugins_set(chat_id, arr):
-    set_setting(str(chat_id), 'plugins_json', jdump(arr))
-
-@bot.callback_query_handler(func=lambda c: c.data == "PLUG")
-def cb_plug(call):
-    chat_id = call.message.chat.id
-    send_menu(chat_id, "Plugins:", kb([[("List", "PLUG_LIST"), ("Add/Toggle", "PLUG_ADD")], [(tr(chat_id, 'back'), 'advanced')]]))
-
-@bot.callback_query_handler(func=lambda c: c.data in ("PLUG_LIST", "PLUG_ADD"))
-def cb_plug_ops(call):
-    chat_id = call.message.chat.id
-    if call.data == "PLUG_LIST":
-        arr = plugins_get(chat_id)
-        if arr:
-            text = "Plugins:\n" + "\n".join(f"- {p['name']}: {'on' if p.get('on') else 'off'}" for p in arr)
-        else:
-            text = "No plugins."
-        send_menu(chat_id, text, kb_back(chat_id, 'PLUG'))
-    else:
-        STATE[(chat_id, "await_plug")] = True
-        send_menu(chat_id, "Format: name on|off", kb_back(chat_id, 'PLUG'))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_plug")) and bool(m.text))
-def plug_add_text(m):
-    parts = m.text.split()
-    if len(parts) < 2:
-        bot.reply_to(m, "Use: name on|off"); return
-    name, onoff = parts[0], parts[1].lower()
-    arr = plugins_get(m.chat.id)
-    found = next((p for p in arr if p['name'] == name), None)
-    if found:
-        found['on'] = (onoff == 'on')
-    else:
-        arr.append({'name': name, 'on': (onoff == 'on')})
-    plugins_set(m.chat.id, arr)
-    STATE.pop((m.chat.id, "await_plug"), None)
-    bot.reply_to(m, f"Plugin {name}: {'on' if (onoff == 'on') else 'off'}")
-
-# ---------- Dumps & Mod-Logs ----------
-@bot.callback_query_handler(func=lambda c: c.data in ("DUMP_T", "DUMP_S"))
-def cb_dump_ops(call):
-    chat_id = call.message.chat.id
-    if call.data == "DUMP_T":
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT enabled FROM dumps WHERE chat_id=?", (str(chat_id),))
-        row = c.fetchone()
-        enabled = 0 if (row and row['enabled']) else 1
-        c.execute("INSERT INTO dumps(chat_id,enabled) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET enabled=?", (str(chat_id), enabled, enabled))
-        conn.commit(); conn.close()
-        send_menu(chat_id, f"Dump: {'on' if enabled else 'off'}", kb_back(chat_id, 'g_dumps'))
-    else:
-        STATE[(chat_id, "await_dump_target")] = True
-        send_menu(chat_id, "Forward target chat_id bhejo (negative id for channels).", kb_back(chat_id, 'g_dumps'))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_dump_target")) and bool(m.text))
-def dump_set_target(m):
-    chat_id = m.chat.id
-    target = m.text.strip()
-    conn = db(); c = conn.cursor()
-    # Use INSERT OR REPLACE to set/replace the forward_to while preserving existing enabled flag if present
-    c.execute("INSERT OR REPLACE INTO dumps(chat_id,forward_to,enabled) VALUES(?,?,COALESCE((SELECT enabled FROM dumps WHERE chat_id=?),0))", (str(chat_id), target, str(chat_id)))
-    conn.commit(); conn.close()
-    STATE.pop((chat_id, "await_dump_target"), None)
-    bot.reply_to(m, f"Dump target set: {target}")
-
-def log_action(chat_id, text):
-    # send to configured mod log target in menu_json
-    menu = menu_get(chat_id)
-    target = menu.get('mod_log_target')
-    if not target:
-        # also check old dumps table
-        try:
-            conn = db(); c = conn.cursor()
-            c.execute("SELECT forward_to FROM dumps WHERE chat_id=?", (str(chat_id),))
-            row = c.fetchone(); conn.close()
-            if row and row['forward_to']:
-                target = int(row['forward_to'])
-        except:
-            target = None
-    if not target:
-        return
-    try:
-        bot.send_message(int(target), f"[ModLog] {chat_id}: {text}")
-    except Exception as e:
-        logging.warning(f"log_action error: {e}")
-
-# ---------- Message filters & locks enforcement ----------
-MAX_MSG_LEN = 4096
-
-def paginate(text, limit=MAX_MSG_LEN):
-    if not isinstance(text, str):
-        text = str(text)
-    if len(text) <= limit:
-        return [text]
-    chunks = []
-    s = text
-    while s:
-        chunks.append(s[:limit]); s = s[limit:]
-    return chunks
-
-# enforcement helper: delete and log
-def enforce_delete(m, reason="deleted"):
-    try:
-        bot.delete_message(m.chat.id, m.message_id)
-    except Exception:
-        pass
-    track(m.chat.id, m.from_user.id, f"deleted:{reason}")
-    log_action(m.chat.id, f"Deleted message from {m.from_user.id} — {reason}")
-
-# message handler for general messages: triggers, locks, xp, flood
-@bot.message_handler(content_types=['text', 'photo', 'video', 'sticker', 'document', 'audio', 'voice'])
-def handle_message(m):
-    chat_id = m.chat.id
-    user_id = m.from_user.id
-    text = getattr(m, 'text', '') or ''
-    # ignore bot messages
-    if m.from_user.is_bot:
-        return
-
-    # 1) Flood check
-    if check_flood(chat_id, user_id):
-        # mute or delete -- simple delete and log
-        enforce_delete(m, "flood")
-        return
-
-    # 2) blacklist check
-    if contains_blacklist(chat_id, text):
-        enforce_delete(m, "blacklist")
-        return
-
-    # 3) locks enforcement
-    locks = get_locks(chat_id)
-    # urls detection
-    if locks.get('urls'):
-        if re.search(r'https?://', text or '') or re.search(r'www\.', text or ''):
-            enforce_delete(m, "url")
-            return
-    if locks.get('forwards') and getattr(m, 'forward_from', None):
-        enforce_delete(m, "forward")
-        return
-    if locks.get('photos') and getattr(m, 'photo', None):
-        enforce_delete(m, "photo")
-        return
-    if locks.get('stickers') and getattr(m, 'sticker', None):
-        enforce_delete(m, "sticker")
-        return
-
-    # 4) triggers
-    rep = match_trigger(chat_id, text)
-    if rep:
-        bot.reply_to(m, rep)
-        track(chat_id, user_id, "trigger_reply")
-
-    # 5) XP awarding if enabled
-    menu = menu_get(chat_id)
-    if menu.get('xp_enabled', False) and text and not text.startswith('/'):
-        # simple rate: 1 point per message; more complex rate-limits possible
-        new_pts = xp_add(chat_id, user_id, 1)
-        track(chat_id, user_id, "xp_gain")
-
-# ---------- Polls (unchanged) ----------
-def polls_create(chat_id, question, options, multiple=False):
-    conn = db(); c = conn.cursor()
-    c.execute("INSERT INTO polls(chat_id,question,options_json,multiple,open,created_at) VALUES(?,?,?,?,?,?)",
-              (str(chat_id), question, jdump({'opts': options, 'votes': {}}), 1 if multiple else 0, 1, now_ts()))
-    conn.commit(); conn.close()
-
-def polls_get_open(chat_id):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT * FROM polls WHERE chat_id=? AND open=1 ORDER BY id DESC", (str(chat_id),))
-    rows = c.fetchall(); conn.close(); return rows
-
-def polls_get(chat_id, pid):
-    conn = db(); c = conn.cursor()
-    c.execute("SELECT * FROM polls WHERE chat_id=? AND id=?", (str(chat_id), pid))
-    row = c.fetchone(); conn.close(); return row
-
-def polls_save_row(row):
-    conn = db(); c = conn.cursor()
-    c.execute("UPDATE polls SET options_json=?, open=? WHERE id=?", (row['options_json'], row['open'], row['id']))
-    conn.commit(); conn.close()
-
-def polls_render_kb(pid, options):
-    rows = []
-    for idx, opt in enumerate(options):
-        rows.append([(opt, f"PL_VOTE_{pid}_{idx}")])
-    rows.append([("✅ Close", "PL_CLOSE_"+str(pid)), ("🔙 Back", "PL_BACK")])
-    return kb(rows)
-
-@bot.callback_query_handler(func=lambda c: c.data in ("PL_NEW", "PL_LIST", "PL_BACK"))
-def cb_polls_menu(call):
-    chat_id = call.message.chat.id
-    if call.data == "PL_NEW":
-        STATE[(chat_id, "await_poll_q")] = True
-        send_menu(chat_id, "Poll question bhejo.\nFormat: Question | opt1;opt2;opt3", kb([[("🔙 Back", "advanced")]]))
-    elif call.data == "PL_LIST":
-        rows = polls_get_open(chat_id)
-        if not rows:
-            send_menu(chat_id, "No open polls.", kb([[("🔙 Back", "advanced")]])); return
-        lines = []
-        for r in rows:
-            data = jload(r['options_json'], {'opts': [], 'votes': {}})
-            counts = [len(data['votes'].get(str(i), [])) for i in range(len(data['opts']))]
-            lines.append(f"#{r['id']} {r['question']} — " + ", ".join(f"{data['opts'][i]}={counts[i]}" for i in range(len(counts))))
-        send_menu(chat_id, "Open polls:\n" + "\n".join(lines), kb([[("🔙 Back", "advanced")]]))
-    else:
-        send_menu(chat_id, "Advanced:", kb([[("Subs", "SUBS"), ("Plugins", "PLUG")], [("Polls", "PL_MENU")], [(tr(chat_id, 'back'), 'back_main')]]))
-
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_poll_q")) and bool(m.text))
-def polls_new_text(m):
-    chat_id = m.chat.id
-    st = STATE.get((chat_id, "await_poll_q"))
-    STATE.pop((chat_id, "await_poll_q"), None)
-    if '|' not in m.text:
-        bot.reply_to(m, "Format: Question | opt1;opt2;opt3"); return
-    q, opts = m.text.split('|', 1)
-    options = [o.strip() for o in opts.split(';') if o.strip()]
-    if len(options) < 2:
-        bot.reply_to(m, "कम से कम 2 options देने होंगे."); return
-    polls_create(chat_id, q.strip(), options, multiple=False)
-    row = polls_get_open(chat_id)[0]
-    send_menu(chat_id, f"Poll #{row['id']}: {q.strip()}", polls_render_kb(row['id'], options))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("PL_VOTE_"))
-def cb_poll_vote(call):
-    chat_id = call.message.chat.id
-    try:
-        _, _, pid, idx = call.data.split('_', 3)
-    except Exception:
-        return
-    pid = safe_int(pid); idx = safe_int(idx)
-    row = polls_get(chat_id, pid)
-    if not row: return
-    if not row['open']:
-        send_menu(chat_id, "Poll बंद है.", polls_render_kb(pid, jload(row['options_json'], {})['opts'])); return
-    data = jload(row['options_json'], {'opts': [], 'votes': {}})
-    if idx < 0 or idx >= len(data['opts']): return
-    votes = data.get('votes', {})
-    uid = str(call.from_user.id)
-    for k in list(votes.keys()):
-        if uid in votes[k]:
-            votes[k].remove(uid)
-    arr = votes.get(str(idx), [])
-    if uid not in arr:
-        arr.append(uid)
-    votes[str(idx)] = arr
-    data['votes'] = votes
-    newrow = dict(row); newrow['options_json'] = jdump(data)
-    polls_save_row(newrow)
-    counts = [len(votes.get(str(i), [])) for i in range(len(data['opts']))]
-    send_menu(chat_id, f"Voted: {data['opts'][idx]}\n" + ", ".join(f"{data['opts'][i]}={counts[i]}" for i in range(len(counts))), polls_render_kb(pid, data['opts']))
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("PL_CLOSE_"))
-def cb_poll_close(call):
-    chat_id = call.message.chat.id
-    pid = safe_int(call.data.split('_')[-1])
-    row = polls_get(chat_id, pid)
-    if not row: return
-    data = jload(row['options_json'], {'opts': [], 'votes': {}})
-    row = dict(row); row['open'] = 0; polls_save_row(row)
-    counts = [len(data['votes'].get(str(i), [])) for i in range(len(data['opts']))]
-    send_menu(chat_id, f"Closed #{pid}\n" + "\n".join(f"- {data['opts'][i]}: {counts[i]}" for i in range(len(counts))), kb([[("🔙 Back", "PL_MENU")]]))
-
-# ---------- Pagination (unchanged) ----------
-def render_list(title, items, back_cb, page=1, per_page=20, prefix=""):
-    total = len(items)
-    pages = max(1, (total + per_page - 1)//per_page)
-    page = clamp(page, 1, pages)
-    start = (page-1)*per_page; end = min(total, start+per_page)
-    view = items[start:end]
-    text = f"{title} ({page}/{pages})\n" + ("\n".join(f"{prefix}{i+1}. {view[i]}" for i in range(len(view))) if view else "(empty)")
-    nav = []
-    if page > 1: nav.append(("⬅️ Prev", f"PG_{back_cb}_{page-1}"))
-    if page < pages: nav.append(("➡️ Next", f"PG_{back_cb}_{page+1}"))
-    rows = [nav] if nav else []
-    rows.append([(tr(back_cb, 'back') if isinstance(back_cb, int) else "🔙 Back", str(back_cb))])
-    return text, kb(rows)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("PG_"))
-def cb_paginate(call):
-    _, key, page = call.data.split("_", 2)
-    page = safe_int(page, 1)
-    chat_id = call.message.chat.id
-    if key == 'TR_LIST':
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT pattern FROM triggers WHERE chat_id=?", (str(chat_id),))
-        rows = [r['pattern'] for r in c.fetchall()]; conn.close()
-        text, markup = render_list("Triggers", rows, "triggers", page, 20, prefix="- ")
-        send_menu(chat_id, text, markup)
-    elif key == 'BL_LIST':
-        conn = db(); c = conn.cursor()
-        c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-        rows = [r['word'] for r in c.fetchall()]; conn.close()
-        text, markup = render_list("Blacklist", rows, "block", page, 20, prefix="- ")
-        send_menu(chat_id, text, markup)
-
-# ---------- Analytics export ----------
-@bot.message_handler(commands=['export_stats'])
-def cmd_export_stats(m):
+# ---------- POLL COMMANDS ----------
+@bot.message_handler(commands=['poll'])
+def cmd_poll(m):
+    """Create a poll"""
     if not is_admin_member(m.chat.id, m.from_user.id):
-        bot.reply_to(m, "Admin only."); return
-    text = tr(m.chat.id, 'stats_title') + "\n\n" + stats_report(m.chat.id, 7) + "\n—\n" + stats_report(m.chat.id, 30)
-    for chunk in paginate(text):
-        bot.reply_to(m, chunk)
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not has_command_permission(m.chat.id, m.from_user.id, 'poll'):
+        bot.reply_to(m, "❌ You don't have permission to use this command.")
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2 or '|' not in args[1]:
+        bot.reply_to(m, 
+            f"❌ Format गलत है।
+"
+            f"{_(m.chat.id, 'usage', usage='/poll <question> | <opt1> | <opt2> | ...')}"
+        )
+        return
+    
+    parts = [p.strip() for p in args[1].split('|')]
+    question = parts[0]
+    options = parts[1:]
+    
+    if len(options) < 2:
+        bot.reply_to(m, "❌ कम से कम 2 options चाहिए।")
+        return
+    
+    try:
+        conn = db()
+        c = conn.cursor()
+        options_json = jdump({'options': options, 'votes': {i: [] for i in range(len(options))}})
+        c.execute("INSERT INTO polls (chat_id, question, options_json, created_at, open) VALUES (?,?,?,?,1)",
+                  (str(m.chat.id), question, options_json, now_ts()))
+        poll_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        # Send poll with inline buttons
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        for i, opt in enumerate(options):
+            markup.add(types.InlineKeyboardButton(
+                f"{opt} (0)", callback_data=f"poll:vote:{poll_id}:{i}"
+            ))
+        markup.add(types.InlineKeyboardButton("🔒 Close Poll", callback_data=f"poll:close:{poll_id}"))
+        
+        bot.send_message(m.chat.id, f"📊 <b>{safe_html(question)}</b>", reply_markup=markup)
+        bot.reply_to(m, _(m.chat.id, 'poll_created'))
+        log_action(m.chat.id, m.from_user.id, f"poll_created:{poll_id}")
+    except Exception as e:
+        logging.warning(f"Create poll failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
 
-# ---------- Backup/Restore (override-safe) ----------
+# ---------- BLACKLIST COMMANDS ----------
+@bot.message_handler(commands=['blacklist'])
+def cmd_blacklist(m):
+    """Add word to blacklist"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/blacklist <word>')}")
+        return
+    
+    word = args[1].lower()
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO blacklist (chat_id, word) VALUES (?,?)",
+                  (str(m.chat.id), word))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, f"✅ '{word}' blacklist में add हो गया।")
+        log_action(m.chat.id, m.from_user.id, f"blacklist_added:{word}")
+    except Exception as e:
+        logging.warning(f"Add blacklist failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['unblacklist'])
+def cmd_unblacklist(m):
+    """Remove word from blacklist"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/unblacklist <word>')}")
+        return
+    
+    word = args[1].lower()
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("DELETE FROM blacklist WHERE chat_id=? AND word=?",
+                  (str(m.chat.id), word))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, f"✅ '{word}' blacklist से remove हो गया।")
+        log_action(m.chat.id, m.from_user.id, f"blacklist_removed:{word}")
+    except Exception as e:
+        logging.warning(f"Remove blacklist failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+# ---------- LANGUAGE & SETTINGS ----------
+@bot.message_handler(commands=['lang'])
+def cmd_lang(m):
+    """Change bot language"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2 or args[1] not in ['hi', 'en']:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/lang <hi|en>')}")
+        return
+    
+    lang = args[1]
+    set_setting(m.chat.id, 'lang', lang)
+    bot.reply_to(m, _(m.chat.id, 'setting_updated'))
+
+@bot.message_handler(commands=['locks'])
+def cmd_locks(m):
+    """Show locks status"""
+    locks = locks_get(m.chat.id)
+    text = "🔐 <b>Current Locks:</b>
+
+"
+    
+    lock_types = ['urls', 'photos', 'videos', 'stickers', 'forwards', 'documents']
+    for lock_type in lock_types:
+        status = "🔒" if locks.get(lock_type) else "🔓"
+        text += f"{status} {lock_type.title()}
+"
+    
+    text += f"
+{_(m.chat.id, 'usage', usage='/lock <type> | /unlock <type>')}"
+    bot.reply_to(m, text)
+
+@bot.message_handler(commands=['lock'])
+def cmd_lock(m):
+    """Lock content type"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/lock <urls|photos|videos|stickers|forwards|documents>')}")
+        return
+    
+    lock_type = args[1].lower()
+    valid_types = ['urls', 'photos', 'videos', 'stickers', 'forwards', 'documents']
+    
+    if lock_type not in valid_types:
+        bot.reply_to(m, f"❌ Invalid type. Valid: {', '.join(valid_types)}")
+        return
+    
+    locks = locks_get(m.chat.id)
+    locks[lock_type] = True
+    locks_set(m.chat.id, locks)
+    bot.reply_to(m, f"🔒 {lock_type.title()} locked.")
+    log_action(m.chat.id, m.from_user.id, f"locked:{lock_type}")
+
+@bot.message_handler(commands=['unlock'])
+def cmd_unlock(m):
+    """Unlock content type"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(m, f"{_(m.chat.id, 'usage', usage='/unlock <type>')}")
+        return
+    
+    lock_type = args[1].lower()
+    valid_types = ['urls', 'photos', 'videos', 'stickers', 'forwards', 'documents']
+    
+    if lock_type not in valid_types:
+        bot.reply_to(m, f"❌ Invalid type. Valid: {', '.join(valid_types)}")
+        return
+    
+    locks = locks_get(m.chat.id)
+    locks[lock_type] = False
+    locks_set(m.chat.id, locks)
+    bot.reply_to(m, f"🔓 {lock_type.title()} unlocked.")
+    log_action(m.chat.id, m.from_user.id, f"unlocked:{lock_type}")
+    
+    # ---------- BACKUP & RESTORE ----------
+def export_backup(chat_id):
+    """Export all data for a chat"""
+    try:
+        conn = db()
+        c = conn.cursor()
+        
+        backup = {}
+        tables = ['settings', 'triggers', 'notes', 'commands', 'blacklist', 'xp', 'polls']
+        
+        for table in tables:
+            c.execute(f"SELECT * FROM {table} WHERE chat_id=?", (str(chat_id),))
+            rows = c.fetchall()
+            backup[table] = [dict(row) for row in rows]
+        
+        conn.close()
+        return jdump(backup)
+    except Exception as e:
+        logging.warning(f"Export backup failed: {e}")
+        return "{}"
+
+def import_backup(chat_id, data):
+    """Import backup data"""
+    try:
+        backup = jload(data, {})
+        conn = db()
+        c = conn.cursor()
+        
+        for table, rows in backup.items():
+            if table not in ['settings', 'triggers', 'notes', 'commands', 'blacklist', 'xp', 'polls']:
+                continue
+            
+            for row in rows:
+                row['chat_id'] = str(chat_id)  # Override chat_id
+                
+                if table == 'settings':
+                    c.execute("""INSERT OR REPLACE INTO settings 
+                        (chat_id, lang, welcome_enabled, leave_enabled, flood_window, flood_limit,
+                         blacklist_enabled, locks_json, roles_json, rss_json, plugins_json,
+                         subscriptions_json, menu_json) 
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (row.get('chat_id'), row.get('lang', 'hi'), 
+                         row.get('welcome_enabled', 1), row.get('leave_enabled', 1),
+                         row.get('flood_window', 15), row.get('flood_limit', 7),
+                         row.get('blacklist_enabled', 1), row.get('locks_json', '{}'),
+                         row.get('roles_json', '{}'), row.get('rss_json', '[]'),
+                         row.get('plugins_json', '[]'), row.get('subscriptions_json', '[]'),
+                         row.get('menu_json', '{}')))
+                
+                elif table == 'triggers':
+                    c.execute("INSERT INTO triggers (chat_id, pattern, reply, is_regex) VALUES (?,?,?,?)",
+                             (row['chat_id'], row['pattern'], row['reply'], row.get('is_regex', 0)))
+                
+                elif table == 'notes':
+                    c.execute("INSERT INTO notes (chat_id, key, content, created_at, expires_at) VALUES (?,?,?,?,?)",
+                             (row['chat_id'], row['key'], row['content'], 
+                              row.get('created_at', now_ts()), row.get('expires_at', 0)))
+                
+                elif table == 'blacklist':
+                    c.execute("INSERT INTO blacklist (chat_id, word) VALUES (?,?)",
+                             (row['chat_id'], row['word']))
+                
+                elif table == 'xp':
+                    c.execute("INSERT OR REPLACE INTO xp (chat_id, user_id, points, last_at) VALUES (?,?,?,?)",
+                             (row['chat_id'], row['user_id'], row['points'], row.get('last_at', now_ts())))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logging.warning(f"Import backup failed: {e}")
+        return False
+
 @bot.message_handler(commands=['backup'])
 def cmd_backup(m):
+    """Export backup"""
     if not is_admin_member(m.chat.id, m.from_user.id):
-        bot.reply_to(m, "Admin only."); return
-    conn = db(); c = conn.cursor()
-    dump = {}
-    for tbl, key in [
-        ("settings", "chat_id"), ("triggers", "chat_id"), ("notes", "chat_id"),
-        ("commands", "chat_id"), ("blacklist", "chat_id"), ("analytics", "chat_id"),
-        ("punishments", "chat_id"), ("dumps", "chat_id"), ("polls", "chat_id"), ("xp", "chat_id")
-    ]:
-        c.execute(f"SELECT * FROM {tbl} WHERE {key}=?", (str(m.chat.id),))
-        rows = [dict(r) for r in c.fetchall()]
-        dump[tbl] = rows
-    conn.close()
-    text = jdump(dump)
-    # send as preformatted HTML to avoid markdown/escaping issues (bot parse_mode is HTML)
-    for chunk in paginate(text, 3500):
-        try:
-            bot.reply_to(m, f"<pre>{safe_html(chunk)}</pre>")
-        except Exception:
-            try:
-                bot.reply_to(m, safe_html(chunk))
-            except Exception:
-                pass
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    backup_data = export_backup(m.chat.id)
+    bot.send_message(m.chat.id, 
+        f"💾 <b>Backup Data</b>
+
+"
+        f"<code>{safe_html(backup_data[:4000])}</code>
+
+"
+        f"<i>Save this data and use /restore to import</i>"
+    )
+    log_action(m.chat.id, m.from_user.id, "backup_exported")
 
 @bot.message_handler(commands=['restore'])
 def cmd_restore(m):
+    """Import backup"""
     if not is_admin_member(m.chat.id, m.from_user.id):
-        bot.reply_to(m, "Admin only."); return
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
     if not m.reply_to_message or not m.reply_to_message.text:
-        bot.reply_to(m, "Reply to backup JSON."); return
-    try:
-        data = jload(m.reply_to_message.text.strip(), {})
-        conn = db(); c = conn.cursor()
-        for tbl, rows in data.items():
-            if tbl not in ("settings", "triggers", "notes", "commands", "blacklist", "analytics", "punishments", "dumps", "polls", "xp"):
-                continue
-            for r in rows:
-                if tbl == "settings":
-                    c.execute("INSERT OR REPLACE INTO settings(chat_id,lang,welcome_enabled,leave_enabled,flood_window,flood_limit,blacklist_enabled,locks_json,roles_json,rss_json,plugins_json,subscriptions_json,menu_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                              (r.get('chat_id'), r.get('lang','hi'), r.get('welcome_enabled',1), r.get('leave_enabled',1),
-                               r.get('flood_window',15), r.get('flood_limit',7), r.get('blacklist_enabled',1),
-                               r.get('locks_json','{}'), r.get('roles_json','{}'), r.get('rss_json','[]'),
-                               r.get('plugins_json','[]'), r.get('subscriptions_json','[]'), r.get('menu_json','{}')))
-                elif tbl == "triggers":
-                    c.execute("INSERT INTO triggers(chat_id,pattern,reply,is_regex) VALUES(?,?,?,?)",
-                              (str(m.chat.id), r.get('pattern',''), r.get('reply',''), r.get('is_regex',0)))
-                elif tbl == "notes":
-                    c.execute("INSERT INTO notes(chat_id,key,content,created_at,expires_at) VALUES(?,?,?,?,?)",
-                              (str(m.chat.id), r.get('key',''), r.get('content',''), r.get('created_at', now_ts()), r.get('expires_at',0)))
-                elif tbl == "commands":
-                    c.execute("INSERT INTO commands(chat_id,cmd,body,roles) VALUES(?,?,?,?)",
-                              (str(m.chat.id), r.get('cmd',''), r.get('body',''), r.get('roles','all')))
-                elif tbl == "blacklist":
-                    c.execute("INSERT INTO blacklist(chat_id,word) VALUES(?,?)", (str(m.chat.id), r.get('word','')))
-                elif tbl == "analytics":
-                    c.execute("INSERT INTO analytics(chat_id,user_id,action,at) VALUES(?,?,?,?)",
-                              (str(m.chat.id), r.get('user_id',''), r.get('action',''), r.get('at', now_ts())))
-                elif tbl == "punishments":
-                    c.execute("INSERT INTO punishments(chat_id,user_id,type,until_ts) VALUES(?,?,?,?)",
-                              (str(m.chat.id), r.get('user_id',''), r.get('type','mute'), r.get('until_ts',0)))
-                elif tbl == "dumps":
-                    c.execute("INSERT OR REPLACE INTO dumps(chat_id,enabled,forward_to) VALUES(?,?,?)",
-                              (str(m.chat.id), r.get('enabled',0), r.get('forward_to')))
-                elif tbl == "polls":
-                    c.execute("INSERT INTO polls(chat_id,question,options_json,multiple,open,created_at) VALUES(?,?,?,?,?,?)",
-                              (str(m.chat.id), r.get('question',''), r.get('options_json','{"opts":[],"votes":{}}'),
-                               r.get('multiple',0), r.get('open',1), r.get('created_at', now_ts())))
-                elif tbl == "xp":
-                    c.execute("INSERT INTO xp(chat_id,user_id,points,last_at) VALUES(?,?,?,?)",
-                              (str(m.chat.id), r.get('user_id',''), r.get('points',0), r.get('last_at', now_ts())))
-        conn.commit(); conn.close()
-        bot.reply_to(m, "Restore done.")
-    except Exception as e:
-        bot.reply_to(m, f"Restore error: {e}")
-
-# ---------- Manual Scheduler (unchanged) ----------
-def sched_get(chat_id):
-    row = get_settings(str(chat_id))
-    menu = jload(row['menu_json'], {}) or {}
-    return menu.get('sched', [])
-
-def sched_set(chat_id, arr):
-    row = get_settings(str(chat_id))
-    menu = jload(row['menu_json'], {}) or {}
-    menu['sched'] = arr
-    set_setting(str(chat_id), 'menu_json', jdump(menu))
-
-@bot.callback_query_handler(func=lambda c: c.data in ("SCH_ADD", "SCH_LIST"))
-def cb_sched(call):
-    chat_id = call.message.chat.id
-    if call.data == "SCH_ADD":
-        STATE[(chat_id, "await_sched")] = {'step': 1}
-        send_menu(chat_id, "Message bhejo jo schedule करना है.", kb_back(chat_id, 'schedule'))
+        bot.reply_to(m, "❌ Backup JSON को reply करें।")
+        return
+    
+    data = m.reply_to_message.text.strip()
+    if import_backup(m.chat.id, data):
+        bot.reply_to(m, "✅ Backup restore हो गया!")
+        log_action(m.chat.id, m.from_user.id, "backup_restored")
     else:
-        arr = sched_get(chat_id)
-        if arr:
-            text = "Scheduled:\n" + "\n".join(f"- {a['when']} => {a['text'][:40]}" for a in arr)
-        else:
-            text = "No scheduled."
-        send_menu(chat_id, text, kb_back(chat_id, 'schedule'))
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
 
-@bot.message_handler(func=lambda m: STATE.get((m.chat.id, "await_sched")) and bool(m.text))
-def sched_flow(m):
-    chat_id = m.chat.id
-    st = STATE.get((chat_id, "await_sched"))
-    if st['step'] == 1:
-        st['text'] = m.text.strip()
-        st['step'] = 2
-        STATE[(chat_id, "await_sched")] = st
-        bot.reply_to(m, "Kab bhejna? Format: YYYY-MM-DD HH:MM (UTC)")
-    else:
-        when = m.text.strip()
+# ---------- NEW MEMBER HANDLER (CAPTCHA) ----------
+@bot.message_handler(content_types=['new_chat_members'])
+def handle_new_members(m):
+    """Handle new members with captcha"""
+    settings = get_settings(m.chat.id)
+    
+    for user in m.new_chat_members:
+        # Skip bots
+        if user.is_bot:
+            continue
+        
+        # Check rejoin
+        if user.id in rejoin_tracker[m.chat.id]:
+            ban_user(m.chat.id, user.id, "rejoin detected")
+            try:
+                bot.delete_message(m.chat.id, m.message_id)
+            except:
+                pass
+            continue
+        
+        rejoin_tracker[m.chat.id].add(user.id)
+        
+        # Restrict user
+        restrict_new_user(m.chat.id, user.id)
+        
+        # Create captcha
+        q1, q2 = create_captcha(m.chat.id, user.id)
+        
+        markup = types.InlineKeyboardMarkup(row_width=3)
+        # Generate 3 options (1 correct, 2 wrong)
+        correct = q1 + q2
+        options = [correct]
+        while len(options) < 3:
+            wrong = random.randint(correct - 5, correct + 5)
+            if wrong not in options and wrong > 0:
+                options.append(wrong)
+        random.shuffle(options)
+        
+        buttons = [
+            types.InlineKeyboardButton(str(opt), callback_data=f"captcha:{opt}")
+            for opt in options
+        ]
+        markup.add(*buttons)
+        
+        name = get_user_mention(user)
+        text = _(m.chat.id, 'captcha_verify', q1=q1, q2=q2)
+        text = f"{name}
+
+{text}"
+        
         try:
-            dt = datetime.strptime(when, "%Y-%m-%d %H:%M")
-        except ValueError:
-            bot.reply_to(m, "Format galat. Use: YYYY-MM-DD HH:MM"); return
-        arr = sched_get(chat_id); arr.append({'when': when, 'text': st['text']})
-        sched_set(chat_id, arr)
-        STATE.pop((chat_id, "await_sched"), None)
-        bot.reply_to(m, f"Scheduled at {when}")
-
-def sched_tick():
-    while True:
-        try:
-            conn = db(); c = conn.cursor()
-            c.execute("SELECT chat_id, menu_json FROM settings")
-            rows = c.fetchall()
-            now_utc = datetime.utcnow()
-            for r in rows:
-                chat_id = r['chat_id']
-                menu = jload(r['menu_json'], {}) or {}
-                arr = menu.get('sched', [])
-                keep = []
-                for item in arr:
-                    try:
-                        dt = datetime.strptime(item['when'], "%Y-%m-%d %H:%M")
-                    except Exception:
-                        continue
-                    if now_utc >= dt:
-                        try:
-                            bot.send_message(chat_id, item['text'])
-                        except Exception:
-                            pass
-                    else:
-                        keep.append(item)
-                if len(keep) != len(arr):
-                    menu['sched'] = keep
-                    c2 = conn.cursor()
-                    c2.execute("UPDATE settings SET menu_json=? WHERE chat_id=?", (jdump(menu), chat_id))
-                    conn.commit()
-            conn.close()
-        except Exception as e:
-            logging.warning(f"sched tick error: {e}")
-        time.sleep(20)
-
-Thread(target=sched_tick, daemon=True).start()
-
-# ---------- Auto-clean background thread ----------
-def auto_clean_worker():
-    while True:
-        try:
-            nowt = now_ts()
-            to_delete = []
+            sent = bot.send_message(m.chat.id, text, reply_markup=markup)
+            # Auto-delete captcha message after 3 minutes
             with AUTO_CLEAN_LOCK:
-                remain = []
-                for (chat_id, msg_id, delete_at) in AUTO_CLEAN_QUEUE:
-                    if delete_at <= nowt:
-                        to_delete.append((chat_id, msg_id))
-                    else:
-                        remain.append((chat_id, msg_id, delete_at))
-                AUTO_CLEAN_QUEUE[:] = remain
-            for (chat_id, msg_id) in to_delete:
-                try:
-                    bot.delete_message(chat_id, msg_id)
-                except Exception:
-                    pass
-            time.sleep(2)
+                AUTO_CLEAN_QUEUE.append((m.chat.id, sent.message_id, now_ts() + 180))
         except Exception as e:
-            logging.warning(f"auto_clean_worker error: {e}")
-            time.sleep(5)
+            logging.warning(f"Send captcha failed: {e}")
+        
+        # Send welcome if enabled
+        if settings.get('welcome_enabled', 1):
+            welcome_text = _(m.chat.id, 'welcome_message', name=name)
+            try:
+                bot.send_message(m.chat.id, welcome_text)
+            except:
+                pass
 
-Thread(target=auto_clean_worker, daemon=True).start()
-
-# ---------- Captcha expiry/kick checker ----------
-def captcha_expiry_worker():
-    while True:
+# ---------- LEFT MEMBER HANDLER ----------
+@bot.message_handler(content_types=['left_chat_member'])
+def handle_left_member(m):
+    """Handle member leaving"""
+    settings = get_settings(m.chat.id)
+    
+    if settings.get('leave_enabled', 1):
+        user = m.left_chat_member
+        name = get_user_display_name(user)
+        text = _(m.chat.id, 'goodbye_message', name=safe_html(name))
         try:
-            nowt = now_ts()
-            expired = []
-            # default timeout 60s unless overridden per-chat in menu
-            for key, val in list(pending_captcha.items()):
-                chat_id, user_id = key
-                created = val['created_at']
-                menu = menu_get(chat_id)
-                timeout = int(menu.get('captcha_timeout', 60))
-                if nowt - created > timeout:
-                    expired.append(key)
-            for key in expired:
-                data = pending_captcha.pop(key, None)
-                if not data:
-                    continue
-                chat_id, user_id = key
-                # attempt to kick the user (requires bot to be admin)
-                try:
-                    bot.kick_chat_member(chat_id, user_id)
-                    log_action(chat_id, f"Kicked {user_id} for failing captcha.")
-                except Exception as e:
-                    logging.warning(f"captcha kick error: {e}")
-            time.sleep(5)
-        except Exception as e:
-            logging.warning(f"captcha_expiry_worker error: {e}")
-            time.sleep(5)
+            bot.send_message(m.chat.id, text)
+        except:
+            pass
 
-Thread(target=captcha_expiry_worker, daemon=True).start()
-
-# ---------- Housekeeping (prune notes xp cache etc) ----------
-# ---------- Housekeeping (prune notes, flood cache etc) ----------
-def bg_housekeep():
-    while True:
+# ---------- REGULAR MESSAGE HANDLER ----------
+@bot.message_handler(func=lambda m: True, content_types=['text', 'photo', 'video', 'sticker', 'document'])
+def handle_messages(m):
+    """Handle all regular messages"""
+    # Skip if not a group
+    if m.chat.type not in ['group', 'supergroup']:
+        return
+    
+    chat_id = m.chat.id
+    user_id = m.from_user.id
+    
+    # Skip if admin
+    if is_admin_member(chat_id, user_id):
+        return
+    
+    settings = get_settings(chat_id)
+    
+    # Check locks
+    violations = check_locks(chat_id, m)
+    if violations:
         try:
-            conn = db(); c = conn.cursor()
-            # पुराने expire हुए notes हटाओ
-            c.execute("DELETE FROM notes WHERE expires_at > 0 AND expires_at < ?", (now_ts(),))
-            conn.commit(); conn.close()
-
-            # flood cache साफ़ करो
-            nowt = now_ts()
-            for key, arr in list(user_messages.items()):
-                user_messages[key] = [t for t in arr if nowt - t <= 120]
-
+            bot.delete_message(chat_id, m.message_id)
+            bot.send_message(chat_id, 
+                f"🔒 {get_user_mention(m.from_user)}, "
+                f"{', '.join(violations)} locked हैं।")
         except Exception as e:
-            logging.warning(f"housekeep error: {e}")
+            logging.warning(f"Delete locked content failed: {e}")
+        return
+    
+    # Check blacklist
+    if m.text and settings.get('blacklist_enabled', 1):
+        found, word, _ = check_blacklist(chat_id, m.text)
+        if found:
+            try:
+                bot.delete_message(chat_id, m.message_id)
+                count, banned = add_blacklist_violation(chat_id, user_id)
+                
+                if banned:
+                    bot.send_message(chat_id, 
+                        _(chat_id, 'user_banned', user=get_user_mention(m.from_user)))
+                else:
+                    bot.send_message(chat_id, 
+                        _(chat_id, 'blacklist_violation', count=count))
+            except Exception as e:
+                logging.warning(f"Handle blacklist failed: {e}")
+            return
+    
+    # Check flood
+    is_flood, count, limit = check_flood(chat_id, user_id)
+    if is_flood:
+        # Escalate: warn → mute → ban
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) as cnt FROM punishments WHERE chat_id=? AND user_id=? AND type='flood'",
+                  (str(chat_id), str(user_id)))
+        flood_count = c.fetchone()['cnt']
+        conn.close()
+        
+        if flood_count == 0:
+            warn_user(chat_id, user_id, "flooding")
+            bot.send_message(chat_id, 
+                _(chat_id, 'flood_detected', count=count, limit=limit))
+        elif flood_count == 1:
+            mute_user(chat_id, user_id, 600)  # 10 minutes
+            bot.send_message(chat_id, 
+                _(chat_id, 'user_muted', user=get_user_mention(m.from_user), duration='10m'))
+        else:
+            ban_user(chat_id, user_id, "repeated flooding")
+            bot.send_message(chat_id, 
+                _(chat_id, 'user_banned', user=get_user_mention(m.from_user)))
+        
+        try:
+            bot.delete_message(chat_id, m.message_id)
+        except:
+            pass
+        return
+    
+    # Check triggers (auto-reply)
+    if m.text:
+        try:
+            conn = db()
+            c = conn.cursor()
+            c.execute("SELECT pattern, reply, is_regex FROM triggers WHERE chat_id=?",
+                     (str(chat_id),))
+            triggers = c.fetchall()
+            conn.close()
+            
+            for trigger in triggers:
+                matched = False
+                if trigger['is_regex']:
+                    try:
+                        if re.search(trigger['pattern'], m.text, re.IGNORECASE):
+                            matched = True
+                    except:
+                        pass
+                else:
+                    if trigger['pattern'].lower() in m.text.lower():
+                        matched = True
+                
+                if matched:
+                    bot.reply_to(m, safe_html(trigger['reply']))
+                    log_action(chat_id, user_id, f"trigger_matched:{trigger['pattern']}")
+                    break
+        except Exception as e:
+            logging.warning(f"Check triggers failed: {e}")
+    
+    # Add XP for activity
+    if m.text and len(m.text) > 10:
+        success, points = add_xp(chat_id, user_id, 10)
+        if success and random.random() < 0.1:  # 10% chance to notify
+            bot.send_message(chat_id, _(chat_id, 'xp_gained', points=10))
 
-        # हर 60 सेकंड बाद दोबारा चेक करेगा
-        time.sleep(60)
+# ---------- STATE-BASED MESSAGE HANDLER ----------
+@bot.message_handler(func=lambda m: (m.chat.id, 'note_add') in STATE)
+def handle_note_add(m):
+    """Handle note addition flow"""
+    state = STATE.get((m.chat.id, 'note_add'))
+    if not state:
+        return
+    
+    if 'key' not in state:
+        state['key'] = m.text.strip()
+        STATE[(m.chat.id, 'note_add')] = state
+        bot.reply_to(m, "📝 अब note का content भेजें:")
+    else:
+        key = state['key']
+        content = m.text.strip()
+        
+        try:
+            conn = db()
+            c = conn.cursor()
+            c.execute("INSERT OR REPLACE INTO notes (chat_id, key, content, created_at) VALUES (?,?,?,?)",
+                      (str(m.chat.id), key, content, now_ts()))
+            conn.commit()
+            conn.close()
+            bot.reply_to(m, _(m.chat.id, 'note_added', key=key))
+            log_action(m.chat.id, m.from_user.id, f"note_added:{key}")
+        except Exception as e:
+            logging.warning(f"Save note failed: {e}")
+            bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+        
+        del STATE[(m.chat.id, 'note_add')]
 
-# Background housekeeping thread चालू करो
-Thread(target=bg_housekeep, daemon=True).start()
+@bot.message_handler(func=lambda m: (m.chat.id, 'trigger_add') in STATE)
+def handle_trigger_add(m):
+    """Handle trigger addition flow"""
+    state = STATE.get((m.chat.id, 'trigger_add'))
+    if not state:
+        return
+    
+    if state['step'] == 'pattern':
+        state['pattern'] = m.text.strip()
+        state['step'] = 'reply'
+        STATE[(m.chat.id, 'trigger_add')] = state
+        bot.reply_to(m, "🤖 अब trigger का reply भेजें:")
+    else:
+        pattern = state['pattern']
+        reply = m.text.strip()
+        is_regex = 0
+        
+        if any(c in pattern for c in ['^', '$', '[', ']', '(', ')', '*', '+', '?', '|']):
+            is_regex = 1
+            try:
+                re.compile(pattern)
+            except:
+                bot.reply_to(m, "❌ Invalid regex pattern!")
+                del STATE[(m.chat.id, 'trigger_add')]
+                return
+        
+        try:
+            conn = db()
+            c = conn.cursor()
+            c.execute("INSERT INTO triggers (chat_id, pattern, reply, is_regex) VALUES (?,?,?,?)",
+                      (str(m.chat.id), pattern, reply, is_regex))
+            conn.commit()
+            conn.close()
+            bot.reply_to(m, _(m.chat.id, 'trigger_added'))
+            log_action(m.chat.id, m.from_user.id, f"trigger_added:{pattern}")
+        except Exception as e:
+            logging.warning(f"Add trigger failed: {e}")
+            bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+        
+        del STATE[(m.chat.id, 'trigger_add')]
 
-# ---------- Run ----------
-if __name__ == "__main__":
-    logging.info("Starting bot with polling...")
+@bot.message_handler(func=lambda m: (m.chat.id, 'trigger_test') in STATE)
+def handle_trigger_test(m):
+    """Handle trigger testing flow"""
+    state = STATE.get((m.chat.id, 'trigger_test'))
+    if not state:
+        return
+    
+    test_text = m.text.strip()
+    
     try:
-        bot.polling(none_stop=True, interval=0)  # Choreo के लिए पोलिंग
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT pattern, reply, is_regex FROM triggers WHERE chat_id=?",
+                 (str(m.chat.id),))
+        triggers = c.fetchall()
+        conn.close()
+        
+        matches = []
+        for trigger in triggers:
+            matched = False
+            if trigger['is_regex']:
+                try:
+                    if re.search(trigger['pattern'], test_text, re.IGNORECASE):
+                        matched = True
+                except:
+                    pass
+            else:
+                if trigger['pattern'].lower() in test_text.lower():
+                    matched = True
+            
+            if matched:
+                matches.append((trigger['pattern'], trigger['reply']))
+        
+        if matches:
+            text = "✅ <b>Matching Triggers:</b>
+
+"
+            for pattern, reply in matches:
+                text += f"• <code>{safe_html(pattern)}</code>
+"
+                text += f"  → {safe_html(reply)}
+
+"
+        else:
+            text = "❌ कोई trigger match नहीं हुआ।"
+        
+        bot.reply_to(m, text)
     except Exception as e:
-        logging.error(f"Polling error: {e}")
-        time.sleep(10)
-        bot.polling(none_stop=True, interval=0)
+        logging.warning(f"Test trigger failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+    
+    del STATE[(m.chat.id, 'trigger_test')]
+
+@bot.message_handler(func=lambda m: (m.chat.id, 'blacklist_add') in STATE)
+def handle_blacklist_add(m):
+    """Handle blacklist addition flow"""
+    state = STATE.get((m.chat.id, 'blacklist_add'))
+    if not state:
+        return
+    
+    word = m.text.strip().lower()
+    
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO blacklist (chat_id, word) VALUES (?,?)",
+                  (str(m.chat.id), word))
+        conn.commit()
+        conn.close()
+        bot.reply_to(m, f"✅ '{word}' blacklist में add हो गया।")
+        log_action(m.chat.id, m.from_user.id, f"blacklist_added:{word}")
+    except Exception as e:
+        logging.warning(f"Add blacklist failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+    
+    del STATE[(m.chat.id, 'blacklist_add')]
+
+@bot.message_handler(func=lambda m: (m.chat.id, 'poll_create') in STATE)
+def handle_poll_create(m):
+    """Handle poll creation flow"""
+    state = STATE.get((m.chat.id, 'poll_create'))
+    if not state:
+        return
+    
+    if state['step'] == 'question':
+        state['question'] = m.text.strip()
+        state['step'] = 'options'
+        state['options'] = []
+        STATE[(m.chat.id, 'poll_create')] = state
+        bot.reply_to(m, "📊 Poll options भेजें (एक line में एक option, 'done' लिखकर finish करें):")
+    else:
+        text = m.text.strip()
+        if text.lower() == 'done':
+            if len(state['options']) < 2:
+                bot.reply_to(m, "❌ कम से कम 2 options चाहिए।")
+                return
+            
+            question = state['question']
+            options = state['options']
+            
+            try:
+                conn = db()
+                c = conn.cursor()
+                options_json = jdump({'options': options, 'votes': {i: [] for i in range(len(options))}})
+                c.execute("INSERT INTO polls (chat_id, question, options_json, created_at, open) VALUES (?,?,?,?,1)",
+                          (str(m.chat.id), question, options_json, now_ts()))
+                poll_id = c.lastrowid
+                conn.commit()
+                conn.close()
+                
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                for i, opt in enumerate(options):
+                    markup.add(types.InlineKeyboardButton(
+                        f"{opt} (0)", callback_data=f"poll:vote:{poll_id}:{i}"
+                    ))
+                markup.add(types.InlineKeyboardButton("🔒 Close Poll", callback_data=f"poll:close:{poll_id}"))
+                
+                bot.send_message(m.chat.id, f"📊 <b>{safe_html(question)}</b>", reply_markup=markup)
+                bot.reply_to(m, _(m.chat.id, 'poll_created'))
+                log_action(m.chat.id, m.from_user.id, f"poll_created:{poll_id}")
+            except Exception as e:
+                logging.warning(f"Create poll failed: {e}")
+                bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+            
+            del STATE[(m.chat.id, 'poll_create')]
+        else:
+            state['options'].append(text)
+            STATE[(m.chat.id, 'poll_create')] = state
+            bot.reply_to(m, f"✅ Option add हुआ। Total: {len(state['options'])}. अगला option भेजें या 'done' लिखें।")
+            
+            # ---------- POLL VOTING CALLBACK HANDLER (ADDITIONAL) ----------
+# This extends the callback_handler with poll voting logic
+
+# Add this to the existing callback_handler function (insert after poll actions):
+"""
+        # Poll vote handling
+        elif data.startswith('poll:vote:'):
+            parts = data.split(':')
+            poll_id = int(parts[2])
+            option_idx = int(parts[3])
+            
+            try:
+                conn = db()
+                c = conn.cursor()
+                c.execute("SELECT question, options_json, open FROM polls WHERE id=? AND chat_id=?",
+                         (poll_id, str(chat_id)))
+                row = c.fetchone()
+                
+                if not row:
+                    bot.answer_callback_query(call.id, "❌ Poll not found", show_alert=True)
+                    conn.close()
+                    return
+                
+                if not row['open']:
+                    bot.answer_callback_query(call.id, "❌ Poll closed", show_alert=True)
+                    conn.close()
+                    return
+                
+                poll_data = jload(row['options_json'], {})
+                votes = poll_data.get('votes', {})
+                
+                # Remove user's previous vote
+                for idx in votes:
+                    if str(user_id) in votes[idx]:
+                        votes[idx].remove(str(user_id))
+                
+                # Add new vote
+                if str(option_idx) not in votes:
+                    votes[str(option_idx)] = []
+                votes[str(option_idx)].append(str(user_id))
+                
+                poll_data['votes'] = votes
+                c.execute("UPDATE polls SET options_json=? WHERE id=?",
+                         (jdump(poll_data), poll_id))
+                conn.commit()
+                conn.close()
+                
+                # Update buttons
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                for i, opt in enumerate(poll_data['options']):
+                    vote_count = len(votes.get(str(i), []))
+                    markup.add(types.InlineKeyboardButton(
+                        f"{opt} ({vote_count})", 
+                        callback_data=f"poll:vote:{poll_id}:{i}"
+                    ))
+                markup.add(types.InlineKeyboardButton("🔒 Close Poll", callback_data=f"poll:close:{poll_id}"))
+                
+                bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=markup)
+                bot.answer_callback_query(call.id, "✅ Vote recorded!")
+                
+            except Exception as e:
+                logging.warning(f"Poll vote failed: {e}")
+                bot.answer_callback_query(call.id, "❌ Error voting", show_alert=True)
+        
+        # Poll close handling
+        elif data.startswith('poll:close:'):
+            poll_id = int(data.split(':')[2])
+            
+            try:
+                conn = db()
+                c = conn.cursor()
+                c.execute("UPDATE polls SET open=0 WHERE id=? AND chat_id=?",
+                         (poll_id, str(chat_id)))
+                conn.commit()
+                
+                c.execute("SELECT question, options_json FROM polls WHERE id=?", (poll_id,))
+                row = c.fetchone()
+                conn.close()
+                
+                if row:
+                    poll_data = jload(row['options_json'], {})
+                    text = f"📊 <b>{safe_html(row['question'])}</b>
+
+🔒 <i>Poll Closed</i>
+
+<b>Results:</b>
+"
+                    
+                    votes = poll_data.get('votes', {})
+                    total_votes = sum(len(v) for v in votes.values())
+                    
+                    for i, opt in enumerate(poll_data['options']):
+                        vote_count = len(votes.get(str(i), []))
+                        percentage = (vote_count / total_votes * 100) if total_votes > 0 else 0
+                        bar = '█' * int(percentage / 10)
+                        text += f"
+{opt}: {vote_count} votes ({percentage:.1f}%)
+{bar}
+"
+                    
+                    bot.edit_message_text(text, chat_id, msg_id)
+                    bot.answer_callback_query(call.id, "✅ Poll closed")
+                    log_action(chat_id, user_id, f"poll_closed:{poll_id}")
+            
+            except Exception as e:
+                logging.warning(f"Close poll failed: {e}")
+                bot.answer_callback_query(call.id, "❌ Error closing poll", show_alert=True)
+"""
+
+# ---------- ERROR HANDLER ----------
+@bot.message_handler(func=lambda m: False)
+def error_handler(m):
+    """Global error handler (fallback)"""
+    pass
+
+# ---------- EXCEPTION HANDLER ----------
+def handle_exception(e):
+    """Log exceptions"""
+    logging.error(f"Unhandled exception: {e}", exc_info=True)
+
+# ---------- ADDITIONAL ADMIN COMMANDS ----------
+
+@bot.message_handler(commands=['pin'])
+def cmd_pin(m):
+    """Pin a message"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not m.reply_to_message:
+        bot.reply_to(m, "❌ Reply to message करें।")
+        return
+    
+    try:
+        bot.pin_chat_message(m.chat.id, m.reply_to_message.message_id)
+        bot.reply_to(m, "📌 Message pin हो गया।")
+        log_action(m.chat.id, m.from_user.id, "message_pinned")
+    except Exception as e:
+        logging.warning(f"Pin failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['unpin'])
+def cmd_unpin(m):
+    """Unpin message"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    try:
+        bot.unpin_chat_message(m.chat.id)
+        bot.reply_to(m, "📌 Message unpin हो गया।")
+        log_action(m.chat.id, m.from_user.id, "message_unpinned")
+    except Exception as e:
+        logging.warning(f"Unpin failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['purge'])
+def cmd_purge(m):
+    """Delete multiple messages"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    if not m.reply_to_message:
+        bot.reply_to(m, "❌ Start message को reply करें।")
+        return
+    
+    start_id = m.reply_to_message.message_id
+    end_id = m.message_id
+    
+    deleted = 0
+    for msg_id in range(start_id, end_id + 1):
+        try:
+            bot.delete_message(m.chat.id, msg_id)
+            deleted += 1
+            time.sleep(0.1)  # Rate limit
+        except:
+            pass
+    
+    bot.send_message(m.chat.id, f"🗑 {deleted} messages delete हुए।")
+    log_action(m.chat.id, m.from_user.id, f"purge:{deleted}")
+
+@bot.message_handler(commands=['info'])
+def cmd_info(m):
+    """Show user info"""
+    target = m.reply_to_message.from_user if m.reply_to_message else m.from_user
+    
+    try:
+        member = bot.get_chat_member(m.chat.id, target.id)
+        rank, xp = get_user_rank(m.chat.id, target.id)
+        
+        text = f"👤 <b>User Info</b>
+
+"
+        text += f"Name: {safe_html(get_user_display_name(target))}
+"
+        text += f"ID: <code>{target.id}</code>
+"
+        text += f"Status: {member.status}
+"
+        text += f"XP: {xp}
+"
+        text += f"Rank: #{rank}
+"
+        
+        if target.username:
+            text += f"Username: @{target.username}
+"
+        
+        # Check punishments
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT type, COUNT(*) as cnt FROM punishments WHERE chat_id=? AND user_id=? GROUP BY type",
+                  (str(m.chat.id), str(target.id)))
+        punishments = c.fetchall()
+        conn.close()
+        
+        if punishments:
+            text += f"
+<b>Punishments:</b>
+"
+            for p in punishments:
+                text += f"• {p['type']}: {p['cnt']}
+"
+        
+        bot.reply_to(m, text)
+    except Exception as e:
+        logging.warning(f"Info failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['stats'])
+def cmd_stats(m):
+    """Show group statistics"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    try:
+        conn = db()
+        c = conn.cursor()
+        
+        # Count various items
+        c.execute("SELECT COUNT(*) as cnt FROM notes WHERE chat_id=?", (str(m.chat.id),))
+        notes_count = c.fetchone()['cnt']
+        
+        c.execute("SELECT COUNT(*) as cnt FROM triggers WHERE chat_id=?", (str(m.chat.id),))
+        triggers_count = c.fetchone()['cnt']
+        
+        c.execute("SELECT COUNT(*) as cnt FROM blacklist WHERE chat_id=?", (str(m.chat.id),))
+        blacklist_count = c.fetchone()['cnt']
+        
+        c.execute("SELECT COUNT(*) as cnt FROM xp WHERE chat_id=?", (str(m.chat.id),))
+        users_count = c.fetchone()['cnt']
+        
+        c.execute("SELECT COUNT(*) as cnt FROM polls WHERE chat_id=? AND open=1", (str(m.chat.id),))
+        polls_count = c.fetchone()['cnt']
+        
+        conn.close()
+        
+        text = f"📊 <b>Group Statistics</b>
+
+"
+        text += f"📝 Notes: {notes_count}
+"
+        text += f"🤖 Triggers: {triggers_count}
+"
+        text += f"🚫 Blacklist Words: {blacklist_count}
+"
+        text += f"👥 Active Users: {users_count}
+"
+        text += f"📊 Active Polls: {polls_count}
+"
+        
+        bot.reply_to(m, text)
+    except Exception as e:
+        logging.warning(f"Stats failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['setflood'])
+def cmd_setflood(m):
+    """Set flood protection limits"""
+    if not is_admin_member(m.chat.id, m.from_user.id):
+        bot.reply_to(m, _(m.chat.id, 'admin_only'))
+        return
+    
+    args = m.text.split()
+    if len(args) != 3:
+        bot.reply_to(m, 
+            f"❌ Format गलत है।
+"
+            f"{_(m.chat.id, 'usage', usage='/setflood <limit> <window_seconds>')}"
+        )
+        return
+    
+    try:
+        limit = int(args[1])
+        window = int(args[2])
+        
+        if limit < 1 or window < 1:
+            bot.reply_to(m, "❌ Values must be positive.")
+            return
+        
+        set_setting(m.chat.id, 'flood_limit', limit)
+        set_setting(m.chat.id, 'flood_window', window)
+        
+        bot.reply_to(m, 
+            f"✅ Flood protection updated:
+"
+            f"Limit: {limit} messages
+"
+            f"Window: {window} seconds"
+        )
+        log_action(m.chat.id, m.from_user.id, f"flood_updated:{limit}/{window}")
+    except ValueError:
+        bot.reply_to(m, "❌ Invalid numbers")
+    except Exception as e:
+        logging.warning(f"Set flood failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+@bot.message_handler(commands=['adminlist'])
+def cmd_adminlist(m):
+    """List all admins"""
+    try:
+        admins = bot.get_chat_administrators(m.chat.id)
+        text = "👮 <b>Admins:</b>
+
+"
+        for admin in admins:
+            user = admin.user
+            name = get_user_display_name(user)
+            status = "👑" if admin.status == 'creator' else "👮"
+            text += f"{status} {safe_html(name)}
+"
+        
+        bot.reply_to(m, text)
+    except Exception as e:
+        logging.warning(f"Admin list failed: {e}")
+        bot.reply_to(m, _(m.chat.id, 'error_occurred'))
+
+# ---------- BOT STARTUP & MAIN LOOP ----------
+
+def main():
+    """Main function to start the bot"""
+    logging.info("🤖 Bot starting...")
+    logging.info(f"📊 Database: {DB_PATH}")
+    logging.info("✅ All systems ready")
+    logging.info("🚀 Starting infinite polling...")
+    
+    try:
+        # Start polling with error recovery
+        bot.infinity_polling(
+            timeout=60,
+            long_polling_timeout=60,
+            logger_level=logging.INFO,
+            allowed_updates=['message', 'callback_query', 'chat_member']
+        )
+    except KeyboardInterrupt:
+        logging.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logging.error(f"❌ Bot crashed: {e}", exc_info=True)
+        handle_exception(e)
+
+if __name__ == "__main__":
+    main()
+
+# ---------- END OF bot.py ----------
+            
+            
