@@ -69,8 +69,7 @@ LANG = {
         'user_kicked': '👢 {user} को kick कर दिया',
         'flood_detected': '⚠️ Spam मत करो! ({count}/{limit})',
         'blacklist_violation': '❌ Blacklist word detect हुआ! Violation: {count}/3',
-        'captcha_verify': '🔐 कृपया captcha solve करें:
-{q1} + {q2} = ?',
+        'captcha_verify': '🔐 कृपया captcha solve करें:\n{q1} + {q2} = ?',
         'captcha_success': '✅ Captcha verified! Welcome {name}',
         'captcha_failed': '❌ Captcha गलत है।',
         'welcome_message': '👋 Welcome {name}!',
