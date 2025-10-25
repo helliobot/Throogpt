@@ -103,7 +103,7 @@ LANG = {
         'user_kicked': '👢 {user} kicked',
         'flood_detected': '⚠️ Stop spamming! ({count}/{limit})',
         'blacklist_violation': '❌ Blacklist word detected! Violation: {count}/3',
-        'captcha_verify': '🔐 Please solve captcha:\n{q1} + {q2} = ?',
+        'captcha_verify': '🔐 Please solve captcha: {q1} + {q2} = ?',
         'captcha_success': '✅ Captcha verified! Welcome {name}',
         'captcha_failed': '❌ Wrong captcha.',
         'welcome_message': '👋 Welcome {name}!',
@@ -363,8 +363,7 @@ def notify_missing_permission(chat_id, permission):
         if creator:
             bot.send_message(
                 creator[0].user.id,
-                f"⚠️ Bot को '{permission}' permission नहीं है।\n"
-                f"Group: {chat_id}"
+                f"⚠️ Bot को '{permission}' permission नहीं है। Group: {chat_id}"
             )
     except Exception as e:
         print(f"Error notifying missing permission: {e}")
