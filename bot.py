@@ -98,45 +98,57 @@ LANG = {
         'lang_changed': '✅ भाषा English में बदल गई।',
         'main_menu_desc': 'ग्रुप को मैनेज करने के लिए एक विकल्प चुनें:',
         'settings': '⚙️ सेटिंग्स',
-        'settings_desc': 'बॉट की बेसिक सेटिंग्स मैनेज करें।',
+        'settings_desc': 'ग्रुप में एंट्री, एग्जिट और ब्लैकलिस्ट टॉगल करें।',
         'moderation': '🛡️ मॉडरेशन',
         'moderation_desc': 'ग्रुप मॉडरेशन टूल्स। किसी यूजर को /warn, /mute, /ban, /kick करने के लिए उसके मैसेज को रिप्लाई करें।',
         'locks': '🔐 Locks',
         'locks_desc': 'कंट्रोल करें कि कौन से मीडिया प्रकारों की अनुमति है।',
         'notes': '📝 Notes',
-        'notes_desc': 'पुन: प्रयोज्य टेक्स्ट सेव करें। (कुल: {count})',
+        'notes_desc': 'पुन: प्रयोज्य टेक्स्ट सेव करें।',
         'triggers': '🤖 Triggers',
-        'triggers_desc': 'ऑटो-रिप्लाई सेट करें। (कुल: {count})',
+        'triggers_desc': 'ऑटो-रिप्लाई सेट करें।',
         'xp_system': '🎯 XP सिस्टम',
         'xp_desc': 'यूजर लेवलिंग सिस्टम को मैनेज करें।',
         'xp_settings': '⚙️ XP सेटिंग्स',
         'xp_settings_desc': 'XP सिस्टम को टॉगल करें और कूलडाउन सेट करें।',
         'polls': '📊 Polls',
-        'polls_desc': 'Polls बनाएं। (सक्रिय: {count})',
+        'polls_desc': 'Polls बनाएं या सक्रिय Polls देखें।',
         'blacklist': '🚫 Blacklist',
-        'blacklist_desc': 'ग्रुप में शब्दों को ब्लॉक करें। (कुल: {count})',
+        'blacklist_desc': 'ग्रुप में शब्दों को ब्लॉक करें।',
         'commands': '🔧 कमांड्स',
         'cmd_perms_desc': 'बॉट कमांड के लिए परमिशन सेट करें।',
         'fixed_admin_perm': '👮 एडमिन (Fixed)',
         'delete': '🗑️ डिलीट',
         'language': '🌐 भाषा',
         'welcome': '👋 Welcome',
+        'welcome_enabled_desc': 'नए यूजर्स के लिए स्वागत संदेश और CAPTCHA (यदि कॉन्फ़िगर किया गया हो)।',
         'leave': '🚪 Leave',
+        'leave_enabled_desc': 'ग्रुप छोड़ने पर विदाई संदेश।',
         'blacklist_toggle': '🚫 Blacklist',
-        'xp_enabled': '🎯 XP सिस्टम',
+        'blacklist_enabled_desc': 'ब्लैकलिस्ट किए गए शब्दों का पता लगने पर कार्रवाई करें।',
+        'xp_enabled_desc': 'XP सिस्टम को ऑन/ऑफ करता है।',
         'xp_cooldown': '⏱ XP Cooldown (sec)',
+        'xp_cooldown_desc': 'एक यूजर को दोबारा XP कमाने से पहले का इंतज़ार समय (सेकंड में)।',
         'lock_urls': '🔗 URLs',
+        'lock_urls_desc': 'ग्रुप में URLs/लिंक्स को ब्लॉक करें।',
         'lock_photos': '🖼️ Photos',
+        'lock_photos_desc': 'ग्रुप में फ़ोटो (चित्रों) को ब्लॉक करें।',
         'lock_videos': '🎥 Videos',
+        'lock_videos_desc': 'ग्रुप में वीडियोज़ को ब्लॉक करें।',
         'lock_stickers': '👾 Stickers',
+        'lock_stickers_desc': 'ग्रुप में स्टिकर्स को ब्लॉक करें।',
         'lock_forwards': '↪️ Forwards',
+        'lock_forwards_desc': 'ग्रुप में किसी भी फॉरवर्ड किए गए संदेश को ब्लॉक करें।',
         'lock_documents': '📎 Documents',
+        'lock_documents_desc': 'ग्रुप में फ़ाइलें/दस्तावेजों को ब्लॉक करें।',
         'add_word': '➕ शब्द जोड़ें',
+        'list_words': '📋 शब्द लिस्ट करें',
         'add_note': '➕ Note जोड़ें',
-        'list_notes': '📋 Notes लिस्ट करें ({count})',
+        'list_notes': '📋 Notes लिस्ट करें',
         'add_trigger': '➕ Trigger जोड़ें',
+        'list_triggers': '📋 Triggers लिस्ट करें',
         'create_poll': '➕ Poll बनाएं',
-        'active_polls': '📋 सक्रिय Polls ({count})',
+        'active_polls': '📋 सक्रिय Polls',
         'leaderboard': '🏆 लीडरबोर्ड',
         'my_rank': '📊 मेरा Rank',
         'start_private': '👋 <b>Welcome!</b>\nमैं एक advanced group management bot हूँ।\nमुझे किसी group में add करें और admin बनाएं।',
@@ -184,45 +196,57 @@ LANG = {
         'lang_changed': '✅ Language changed to Hindi.',
         'main_menu_desc': 'Select an option to manage the group:',
         'settings': '⚙️ Settings',
-        'settings_desc': 'Manage basic bot settings.',
+        'settings_desc': 'Toggle entry, exit, and blacklist in the group.',
         'moderation': '🛡️ Moderation',
         'moderation_desc': 'Tools for group moderation. Use commands like /warn, /mute, /ban by replying to a user.',
         'locks': '🔐 Locks',
         'locks_desc': 'Control which media types are allowed.',
         'notes': '📝 Notes',
-        'notes_desc': 'Save reusable texts for the group. (Total: {count})',
+        'notes_desc': 'Save reusable texts for the group.',
         'triggers': '🤖 Triggers',
-        'triggers_desc': 'Set up auto-replies for triggers. (Total: {count})',
+        'triggers_desc': 'Set up auto-replies for triggers.',
         'xp_system': '🎯 XP System',
         'xp_desc': 'Manage the user leveling system.',
         'xp_settings': '⚙️ XP Settings',
         'xp_settings_desc': 'Toggle XP system and set cooldown.',
         'polls': '📊 Polls',
-        'polls_desc': 'Create polls or view active ones. (Active: {count})',
+        'polls_desc': 'Create polls or view active ones.',
         'blacklist': '🚫 Blacklist',
-        'blacklist_desc': 'Manage words blocked in this group. (Total: {count})',
+        'blacklist_desc': 'Manage words blocked in this group.',
         'commands': '🔧 Commands',
         'cmd_perms_desc': 'Set permissions for who can use bot commands.',
         'fixed_admin_perm': '👮 Admin (fixed)',
         'delete': '🗑️ Delete',
         'language': '🌐 Language',
         'welcome': '👋 Welcome',
+        'welcome_enabled_desc': 'Welcome message and CAPTCHA (if configured) for new users.',
         'leave': '🚪 Leave',
+        'leave_enabled_desc': 'Goodbye message when a user leaves the group.',
         'blacklist_toggle': '🚫 Blacklist',
-        'xp_enabled': '🎯 XP System',
+        'blacklist_enabled_desc': 'Take action when blacklisted words are detected.',
+        'xp_enabled_desc': 'Turns the XP system ON/OFF.',
         'xp_cooldown': '⏱ XP Cooldown (sec)',
+        'xp_cooldown_desc': 'The wait time (in seconds) before a user can earn XP again.',
         'lock_urls': '🔗 URLs',
+        'lock_urls_desc': 'Block URLs/links in the group.',
         'lock_photos': '🖼️ Photos',
+        'lock_photos_desc': 'Block photos (images) in the group.',
         'lock_videos': '🎥 Videos',
+        'lock_videos_desc': 'Block videos in the group.',
         'lock_stickers': '👾 Stickers',
+        'lock_stickers_desc': 'Block stickers in the group.',
         'lock_forwards': '↪️ Forwards',
+        'lock_forwards_desc': 'Block any forwarded messages in the group.',
         'lock_documents': '📎 Documents',
+        'lock_documents_desc': 'Block files/documents in the group.',
         'add_word': '➕ Add Word',
+        'list_words': '📋 List Words',
         'add_note': '➕ Add Note',
-        'list_notes': '📋 List Notes ({count})',
+        'list_notes': '📋 List Notes',
         'add_trigger': '➕ Add Trigger',
+        'list_triggers': '📋 List Triggers',
         'create_poll': '➕ Create Poll',
-        'active_polls': '📋 Active Polls ({count})',
+        'active_polls': '📋 Active Polls',
         'leaderboard': '🏆 Leaderboard',
         'my_rank': '📊 My Rank',
         'start_private': '👋 <b>Welcome!</b>\nI am an advanced group management bot.\nAdd me to your group and make me an admin to get started.',
@@ -241,7 +265,7 @@ def _(chat_id, key, **kwargs):
     text = LANG.get(lang, LANG['hi']).get(key, key)
     return text.format(**kwargs) if kwargs else text
 
-# ---------- Utility Functions ----------
+# ---------- Utility Functions (No change to core logic) ----------
 def now_ts():
     "Current Unix timestamp"
     return int(time.time())
@@ -261,7 +285,7 @@ def safe_html(text):
     "Escape HTML entities"
     return html.escape(str(text))
 
-# ---------- Database Initialization ----------
+# ---------- Database Initialization & Helpers (Schema Preserved) ----------
 def db():
     "Return SQLite connection"
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -366,1048 +390,2060 @@ def locks_get(chat_id):
 def locks_set(chat_id, data):
     "Set locks_json"
     set_setting(str(chat_id), 'locks_json', jdump(data))
-    # ---------- UI / Menu Builders & Callback Handling (Part 2) ----------
-# Implements build_toggle_row, send_menu, callback_inline and related helpers.
 
-# ---------- Inline Button / Keyboard Helpers ----------
-def btn(text, callback_data=None, url=None):
-    "Create InlineKeyboardButton"
-    if url:
-        return types.InlineKeyboardButton(text=text, url=url)
-    return types.InlineKeyboardButton(text=text, callback_data=callback_data)
-
-def row(*buttons):
-    kb = types.InlineKeyboardMarkup(row_width=len(buttons))
-    kb.add(*buttons)
-    return kb
-
-def build_toggle_row(chat_id, key, value, desc_key=None):
-    """
-    Build a row for a boolean setting.
-    Rules:
-    - State-first button (Enabled/Disabled)
-    - Description line above buttons when inserted into message text (handled by send_menu)
-    - Uses localization via _()
-    - Returns InlineKeyboardMarkup row (single-row)
-    """
-    state_text = _(chat_id, 'enabled') if value else _(chat_id, 'disabled')
-    # callback: toggle:<key>
-    state_btn = types.InlineKeyboardButton(text=state_text, callback_data=f"toggle:{key}")
-    # second button is an action e.g., 'Edit' or 'Options' - default to a toggle detail
-    opt_btn = types.InlineKeyboardButton(text="⚙️", callback_data=f"toggle:options:{key}")
-    return [state_btn, opt_btn]
-
-# ---------- Menu Sender ----------
-def send_menu(chat_id, user_id=None, private=False):
-    """
-    Send main menu or settings menu for a chat.
-    If private=True, send a private-view tailored to group (used when group creator opens settings privately).
-    """
-    ensure_settings(chat_id)
-    menu = menu_get(chat_id)
-    locks = locks_get(chat_id)
-    notes_count = count_notes(chat_id)
-    triggers_count = count_triggers(chat_id)
-    polls_count = count_polls(chat_id)
-    blacklist_count = count_blacklist(chat_id)
-    xp_meta = menu.get('xp_settings', {"xp_enabled": True, "xp_cooldown": 10})
-
-    title = _(chat_id, 'main_menu')
-    desc = _(chat_id, 'main_menu_desc')
-
-    # Build description text with dynamic counts
-    text_lines = [f"<b>{safe_html(title)}</b>", "", safe_html(desc), ""]
-    # Row: Settings
-    text_lines.append(f"⚙️ <b>{_(chat_id, 'settings')}</b>\n{_(chat_id, 'settings_desc')}")
-    # Locks
-    text_lines.append(f"\n🔐 <b>{_(chat_id, 'locks')}</b>\n{_(chat_id, 'locks_desc')}")
-    # Notes
-    text_lines.append(f"\n📝 <b>{_(chat_id, 'notes')}</b>\n{_(chat_id, 'notes_desc', count=notes_count)}")
-    # Triggers
-    text_lines.append(f"\n🤖 <b>{_(chat_id, 'triggers')}</b>\n{_(chat_id, 'triggers_desc', count=triggers_count)}")
-    # XP
-    text_lines.append(f"\n🎯 <b>{_(chat_id, 'xp_system')}</b>\n{_(chat_id, 'xp_desc')}")
-    # Polls
-    text_lines.append(f"\n📊 <b>{_(chat_id, 'polls')}</b>\n{_(chat_id, 'polls_desc', count=polls_count)}")
-    # Blacklist
-    text_lines.append(f"\n🚫 <b>{_(chat_id, 'blacklist')}</b>\n{_(chat_id, 'blacklist_desc', count=blacklist_count)}")
-
-    full_text = "\n".join(text_lines)
-
-    # Build inline keyboard rows
-    kb = types.InlineKeyboardMarkup(row_width=2)
-
-    # First row: Settings | Moderation
-    kb.add(
-        btn(f"{_(chat_id,'settings')}", callback_data=f"menu:settings"),
-        btn(f"{_(chat_id,'moderation')}", callback_data=f"menu:moderation")
-    )
-
-    # Second row: Locks | Notes
-    kb.add(
-        btn(f"{_(chat_id,'locks')}", callback_data=f"menu:locks"),
-        btn(f"{_(chat_id,'notes')} ({notes_count})", callback_data=f"menu:notes")
-    )
-
-    # Third row: Triggers | XP Settings
-    kb.add(
-        btn(f"{_(chat_id,'triggers')} ({triggers_count})", callback_data=f"menu:triggers"),
-        btn(f"{_(chat_id,'xp_settings')}", callback_data=f"menu:xp_settings")
-    )
-
-    # Fourth row: Polls | Blacklist
-    kb.add(
-        btn(f"{_(chat_id,'polls')} ({polls_count})", callback_data=f"menu:polls"),
-        btn(f"{_(chat_id,'blacklist')} ({blacklist_count})", callback_data=f"menu:blacklist")
-    )
-
-    # Language and Back/Close row
-    kb.add(
-        btn(f"{_(chat_id,'language')}", callback_data=f"lang:toggle"),
-        btn(f"{_(chat_id,'back')}", callback_data=f"menu:back")
-    )
-
-    # Private open hint row (only for group messages shown in group): show 'Open in private chat' for group creator or admins
-    if not private:
-        # Provide a 'Open in private' button that opens a private chat with a deep-link
-        open_text = _(chat_id, 'menu_in_private_button')
-        url = f"https://t.me/{BOT_USERNAME}?start=manage_{chat_id}"
-        kb.add(btn(open_text, url=url))
-
-    # Send or edit message
-    try:
-        if private and user_id:
-            bot.send_message(user_id, _(chat_id, 'menu_in_private_opened', title=get_chat_title(chat_id), desc=_(chat_id, 'settings_desc')), reply_markup=kb)
-        else:
-            bot.send_message(chat_id, full_text, reply_markup=kb)
-    except Exception as e:
-        logging.exception("send_menu failed")
-        # fallback minimal
-        try:
-            bot.send_message(chat_id, _(chat_id, 'error_occurred'))
-        except:
-            pass
-
-# ---------- Quick Chat Metadata Helpers ----------
-def get_chat_title(chat_id):
-    try:
-        info = bot.get_chat(chat_id)
-        return info.title or str(chat_id)
-    except:
-        return str(chat_id)
-
-# ---------- Count Helpers ----------
-def count_notes(chat_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM notes WHERE chat_id=?", (str(chat_id),))
-    r = c.fetchone()[0]
-    conn.close()
-    return r
-
-def count_triggers(chat_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM triggers WHERE chat_id=?", (str(chat_id),))
-    r = c.fetchone()[0]
-    conn.close()
-    return r
-
-def count_polls(chat_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM polls WHERE chat_id=? AND open=1", (str(chat_id),))
-    r = c.fetchone()[0]
-    conn.close()
-    return r
-
-def count_blacklist(chat_id):
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM blacklist WHERE chat_id=?", (str(chat_id),))
-    r = c.fetchone()[0]
-    conn.close()
-    return r
-
-# ---------- Simple Permission Checks ----------
-def is_user_admin(chat_id, user_id):
+# ---------- Admin & Permission Check Functions (existing, preserved) ----------
+def is_admin_member(chat_id, user_id):
+    "Check if user is admin in the chat"
     try:
         member = bot.get_chat_member(chat_id, user_id)
-        return member.status in ['administrator', 'creator']
+        return member.status in ['creator', 'administrator']
     except:
         return False
 
-def is_creator_or_admin(bot_obj, chat_id, user_id):
-    return is_user_admin(chat_id, user_id)
-
-def bot_is_admin(chat_id):
+def is_creator_member(chat_id, user_id):
+    "Check if user is creator of the chat"
     try:
-        me = bot.get_me()
-        m = bot.get_chat_member(chat_id, me.id)
-        return m.status in ['administrator', 'creator']
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status == 'creator'
     except:
         return False
 
-# ---------- /start Command Handler ----------
-@bot.message_handler(commands=['start'])
-def handle_start(message):
+def check_bot_permissions(chat_id):
+    "Check if bot has required permissions"
+    try:
+        global BOT_USERNAME
+        if not BOT_USERNAME:
+            BOT_USERNAME = bot.get_me().username
+            
+        member = bot.get_chat_member(chat_id, bot.get_me().id)
+        return {
+            'can_restrict': member.can_restrict_members,
+            'can_delete': member.can_delete_messages,
+            'can_invite': member.can_invite_users,
+            'can_pin': member.can_pin_messages,
+            'is_admin': member.status == 'administrator'
+        }
+    except:
+        return {}
+
+def notify_missing_permission(chat_id, permission):
+    "Notify admin about missing bot permission"
+    try:
+        admins = bot.get_chat_administrators(chat_id)
+        creator = [a for a in admins if a.status == 'creator']
+        if creator:
+            bot.send_message(
+                creator[0].user.id,
+                f"⚠️ Bot को '{permission}' permission नहीं है। Group: {chat_id}"
+            )
+    except Exception as e:
+        print(f"Error notifying missing permission: {e}")
+
+def has_command_permission(chat_id, user_id, command):
+    "Check if user has permission to use command based on roles_json"
+    # Moderation commands are now fixed to admin only
+    if command in ['warn', 'mute', 'ban', 'kick', 'undo']:
+        return is_admin_member(chat_id, user_id)
+        
+    roles = roles_get(chat_id)
+    role = roles.get(command, 'all')  # default: all users can use
+    
+    if role == 'nobody':
+        return False
+    elif role == 'admin':
+        return is_admin_member(chat_id, user_id)
+    elif role == 'all':
+        return True
+    return False
+
+# ---------- Logging & Analytics (existing, preserved) ----------
+def log_action(chat_id, user_id, action):
+    "Log action to analytics table"
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO analytics (chat_id, user_id, action, at) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), action, now_ts()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.warning(f"Log action failed: {e}")
+
+def forward_log(chat_id, text):
+    "Forward log to configured channel/chat"
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT forward_to FROM dumps WHERE chat_id=? AND enabled=1", (str(chat_id),))
+        row = c.fetchone()
+        conn.close()
+        if row and row['forward_to']:
+            bot.send_message(row['forward_to'], f"📋 Log from {chat_id}: {text}")
+    except Exception as e:
+        logging.warning(f"Forward log failed: {e}")
+
+# ---------- User Info Helpers (existing, preserved) ----------
+def get_user_display_name(user):
+    "Get user's display name"
+    if user.username:
+        return f"@{user.username}"
+    name = user.first_name or ""
+    if user.last_name:
+        name += f" {user.last_name}"
+    return name.strip() or f"User{user.id}"
+
+def get_user_mention(user):
+    "Get HTML mention for user"
+    name = safe_html(user.first_name or f"User{user.id}")
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
+
+# ---------- Punishment System (existing, preserved) ----------
+def warn_user(chat_id, user_id, reason=""):
+    "Warn user with escalation (3 warns → ban)"
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as cnt FROM punishments WHERE chat_id=? AND user_id=? AND type='warn'",
+              (str(chat_id), str(user_id)))
+    count = c.fetchone()['cnt'] + 1
+    
+    c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+              (str(chat_id), str(user_id), 'warn', now_ts()))
+    conn.commit()
+    conn.close()
+    
+    log_action(chat_id, user_id, f"warned:{reason}")
+    
+    if count >= 3:
+        ban_user(chat_id, user_id, "3 warnings")
+        return count, 'banned'
+    return count, 'warned'
+
+def mute_user(chat_id, user_id, duration_sec=3600):
+    "Mute user for specified duration"
+    try:
+        until = now_ts() + duration_sec
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            until_date=until,
+            can_send_messages=False
+        )
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), 'mute', until))
+        conn.commit()
+        conn.close()
+        log_action(chat_id, user_id, f"muted:{duration_sec}s")
+        return True
+    except Exception as e:
+        logging.warning(f"Mute failed: {e}")
+        return False
+
+def ban_user(chat_id, user_id, reason=""):
+    "Ban user permanently"
+    try:
+        bot.ban_chat_member(chat_id, user_id)
+        conn = db()
+        c = conn.cursor()
+        c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+                  (str(chat_id), str(user_id), 'ban', 0))
+        conn.commit()
+        conn.close()
+        log_action(chat_id, user_id, f"banned:{reason}")
+        return True
+    except Exception as e:
+        logging.warning(f"Ban failed: {e}")
+        return False
+
+def kick_user(chat_id, user_id):
+    "Kick user (ban then unban)"
+    try:
+        bot.ban_chat_member(chat_id, user_id)
+        bot.unban_chat_member(chat_id, user_id)
+        log_action(chat_id, user_id, "kicked")
+        return True
+    except Exception as e:
+        logging.warning(f"Kick failed: {e}")
+        return False
+
+def undo_punishment(chat_id, user_id):
+    "Undo last punishment for user"
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT id, type FROM punishments \n                     WHERE chat_id=? AND user_id=? \n                     ORDER BY id DESC LIMIT 1",
+                  (str(chat_id), str(user_id)))
+        row = c.fetchone()
+        if not row:
+            return False, "No punishment found"
+        
+        pid, ptype = row['id'], row['type']
+        c.execute("DELETE FROM punishments WHERE id=?", (pid,))
+        conn.commit()
+        conn.close()
+        
+        if ptype == 'ban':
+            bot.unban_chat_member(chat_id, user_id)
+        elif ptype == 'mute':
+            bot.restrict_chat_member(
+                chat_id, user_id,
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True
+            )
+        
+        log_action(chat_id, user_id, f"undo:{ptype}")
+        return True, ptype
+    except Exception as e:
+        logging.warning(f"Undo failed: {e}")
+        return False, str(e)
+
+# ---------- Flood Protection (existing, preserved) ----------
+def check_flood(chat_id, user_id):
+    "Check if user is flooding, return (is_flood, count, limit)"
+    with FLOOD_LOCK:
+        settings = get_settings(chat_id)
+        window = settings.get('flood_window', 15)
+        limit = settings.get('flood_limit', 7)
+        
+        key = (chat_id, user_id)
+        now = now_ts()
+        cutoff = now - window
+        
+        # Remove old messages
+        user_messages[key] = [ts for ts in user_messages[key] if ts > cutoff]
+        user_messages[key].append(now)
+        
+        count = len(user_messages[key])
+        return count > limit, count, limit
+
+# ---------- Blacklist System (existing, preserved) ----------
+def check_blacklist(chat_id, text):
+    "Check if text contains blacklisted words, return (found, word, violation_count)"
+    try:
+        conn = db()
+        c = conn.cursor()
+        c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
+        words = [row['word'].lower() for row in c.fetchall()]
+        conn.close()
+        
+        text_lower = text.lower()
+        for word in words:
+            if word in text_lower:
+                return True, word, 1
+        return False, None, 0
+    except:
+        return False, None, 0
+
+def add_blacklist_violation(chat_id, user_id):
+    "Track blacklist violations, auto-ban on 3rd"
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) as cnt FROM punishments \n                 WHERE chat_id=? AND user_id=? AND type='blacklist'",
+              (str(chat_id), str(user_id)))
+    count = c.fetchone()['cnt'] + 1
+    
+    c.execute("INSERT INTO punishments (chat_id, user_id, type, until_ts) VALUES (?,?,?,?)",
+              (str(chat_id), str(user_id), 'blacklist', now_ts()))
+    conn.commit()
+    conn.close()
+    
+    if count >= 3:
+        ban_user(chat_id, user_id, "3 blacklist violations")
+        return count, True
+    return count, False
+
+# ---------- Locks System (existing, preserved) ----------
+def check_locks(chat_id, message):
+    "Check if message violates any locks"
+    locks = locks_get(chat_id)
+    
+    violations = []
+    if locks.get('urls') and message.entities:
+        for entity in message.entities:
+            if entity.type in ['url', 'text_link']:
+                violations.append('urls')
+                break
+    
+    if locks.get('photos') and message.photo:
+        violations.append('photos')
+    
+    if locks.get('videos') and message.video:
+        violations.append('videos')
+    
+    if locks.get('stickers') and message.sticker:
+        violations.append('stickers')
+    
+    if locks.get('forwards') and message.forward_date:
+        violations.append('forwards')
+    
+    if locks.get('documents') and message.document:
+        violations.append('documents')
+    
+    return violations
+
+# ---------- Captcha System (existing, preserved) ----------
+def create_captcha(chat_id, user_id):
+    "Create math captcha for new user"
+    with CAPTCHA_LOCK:
+        num1 = random.randint(1, 10)
+        num2 = random.randint(1, 10)
+        answer = num1 + num2
+        
+        pending_captcha[(chat_id, user_id)] = {
+            'answer': answer,
+            'created_at': now_ts(),
+            'q1': num1,
+            'q2': num2
+        }
+        return num1, num2
+
+def verify_captcha(chat_id, user_id, answer):
+    "Verify captcha answer"
+    with CAPTCHA_LOCK:
+        key = (chat_id, user_id)
+        if key not in pending_captcha:
+            return False
+        
+        correct = pending_captcha[key]['answer']
+        try:
+            if int(answer) == correct:
+                del pending_captcha[key]
+                return True
+        except ValueError:
+            pass # Invalid input, treat as incorrect
+        return False
+
+def restrict_new_user(chat_id, user_id):
+    "Restrict new user until captcha verification"
+    try:
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            can_send_messages=False,
+            can_send_media_messages=False,
+            can_send_other_messages=False,
+            can_add_web_page_previews=False
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Restrict new user failed: {e}")
+        return False
+
+def unrestrict_user(chat_id, user_id):
+    "Remove all restrictions from user"
+    try:
+        bot.restrict_chat_member(
+            chat_id, user_id,
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True
+        )
+        return True
+    except Exception as e:
+        logging.warning(f"Unrestrict failed: {e}")
+        return False
+
+# ---------- XP System (XP & Ranking) (existing, preserved logic) ----------
+def add_xp(chat_id, user_id, points=1):
+    "Add XP to user, respecting cooldown and enable flag"
+    chat_id_str = str(chat_id)
+    user_id_str = str(user_id)
+    
+    # Check XP system enablement and cooldown from menu_json
+    menu_data = menu_get(chat_id_str)
+    xp_settings = menu_data.get('xp_settings', {})
+    
+    # Default to enabled=True and 60s cooldown if not set
+    xp_enabled = xp_settings.get('xp_enabled', 1) 
+    cooldown = xp_settings.get('xp_cooldown', 60)
+    
+    if not xp_enabled:
+        return False
+        
+    conn = db()
+    c = conn.cursor()
+    
+    # 1. Check cooldown
+    c.execute("SELECT last_at FROM xp WHERE chat_id=? AND user_id=?", 
+              (chat_id_str, user_id_str))
+    row = c.fetchone()
+    
+    if row and (now_ts() - row['last_at']) < cooldown:
+        conn.close()
+        return False # Cooldown active
+
+    # 2. Add/Update XP
+    c.execute("INSERT INTO xp (chat_id, user_id, points, last_at) VALUES (?, ?, ?, ?) \n              ON CONFLICT(chat_id, user_id) DO UPDATE SET \n              points = points + ?, last_at = ?",
+              (chat_id_str, user_id_str, points, now_ts(), points, now_ts()))
+    conn.commit()
+    conn.close()
+    return True
+
+def get_rank(chat_id, user_id):
+    "Get user's rank and XP"
+    chat_id_str = str(chat_id)
+    user_id_str = str(user_id)
+    
+    conn = db()
+    c = conn.cursor()
+    
+    # Get leaderboard
+    c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC", 
+              (chat_id_str,))
+    leaderboard = c.fetchall()
+    conn.close()
+    
+    rank = 0
+    xp = 0
+    
+    for i, row in enumerate(leaderboard):
+        if row['user_id'] == user_id_str:
+            rank = i + 1
+            xp = row['points']
+            break
+            
+    return rank, xp
+
+# ----------------------------------------------------------------------
+# -------------------- UX/Menu Overhaul Functions ----------------------
+# ----------------------------------------------------------------------
+
+# ---------- Menu Builder Helper (Point 1, 19) ----------
+def build_toggle_row(chat_id, key, value, desc_key, target_id=None):
+    """
+    Creates a description text and an InlineKeyboardMarkup row with a state-first toggle button.
+    
+    Args:
+        chat_id: The ID of the chat (used for translation).
+        key: The unique callback key suffix (e.g., 'welcome_enabled').
+        value: The current state (True/False or 1/0).
+        desc_key: The translation key for the setting's title (e.g., 'welcome').
+        target_id: The target group chat_id if operating in private chat context.
+        
+    Returns:
+        (desc_html_line: str, keyboard_row: list of InlineKeyboardButton)
+    """
+    chat_id_str = str(chat_id)
+    
+    # 1. Description Text (UX Rule 1)
+    desc_title = _(chat_id_str, desc_key)
+    desc_full_key = desc_key + '_desc' # Use key_desc for full description
+    desc_full = _(chat_id_str, desc_full_key) 
+    
+    # 2. Toggle Button Text (State-First) (UX Rule 2)
+    is_enabled = bool(value)
+    state_text = _(chat_id_str, 'enabled') if is_enabled else _(chat_id_str, 'disabled')
+    
+    # Prefix callback data with target_id if in private context (Point 16)
+    target_id_prefix = f"{target_id}:" if target_id else ""
+    # format: toggle:[target_id]:[key]:[new_value]
+    callback_data = f"toggle:{target_id_prefix}{key}:{int(not is_enabled)}" 
+    
+    # HTML formatted description line
+    desc_html_line = f"<b>{desc_title}</b>: <i>{desc_full}</i>"
+    
+    # Keyboard row (State-first button + descriptive label/empty button)
+    row = [
+        types.InlineKeyboardButton(state_text, callback_data=callback_data),
+        types.InlineKeyboardButton(desc_title, callback_data="ignore_label") 
+    ]
+    
+    return desc_html_line, row
+
+def _get_db_counts(chat_id):
+    """Helper to get counts for menu descriptions."""
+    conn = db()
+    counts = {
+        'notes': conn.execute("SELECT COUNT(*) FROM notes WHERE chat_id=?", (str(chat_id),)).fetchone()[0],
+        'triggers': conn.execute("SELECT COUNT(*) FROM triggers WHERE chat_id=?", (str(chat_id),)).fetchone()[0],
+        'polls': conn.execute("SELECT COUNT(*) FROM polls WHERE chat_id=? AND open=1", (str(chat_id),)).fetchone()[0],
+        'blacklist': conn.execute("SELECT COUNT(*) FROM blacklist WHERE chat_id=?", (str(chat_id),)).fetchone()[0],
+    }
+    conn.close()
+    return counts
+
+# ---------- Sub-Menu Builder Implementations (Point 2, 4, 6, 8, 10, 11) ----------
+
+def _build_settings_menu(chat_id, settings, target_id):
+    """Builds the main settings menu with toggles."""
+    chat_id_str = str(chat_id)
+    
+    desc_lines = [_(chat_id_str, 'settings_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # Welcome Toggle
+    welcome_desc, welcome_kb = build_toggle_row(chat_id, 'welcome_enabled', settings.get('welcome_enabled', 1), 'welcome', target_id)
+    desc_lines.append(welcome_desc)
+    keyboard.add(*welcome_kb)
+    
+    # Leave Toggle
+    leave_desc, leave_kb = build_toggle_row(chat_id, 'leave_enabled', settings.get('leave_enabled', 1), 'leave', target_id)
+    desc_lines.append(leave_desc)
+    keyboard.add(*leave_kb)
+    
+    # Blacklist Toggle
+    blacklist_desc, blacklist_kb = build_toggle_row(chat_id, 'blacklist_enabled', settings.get('blacklist_enabled', 1), 'blacklist_toggle', target_id)
+    desc_lines.append(blacklist_desc)
+    keyboard.add(*blacklist_kb)
+
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_locks_menu(chat_id, locks, target_id):
+    """Builds the Locks menu with all lock toggles."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'locks_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # Lock Keys: {db_key: lang_key}
+    lock_keys = {
+        'urls': 'lock_urls', 
+        'photos': 'lock_photos', 
+        'videos': 'lock_videos',
+        'stickers': 'lock_stickers', 
+        'forwards': 'lock_forwards', 
+        'documents': 'lock_documents',
+    }
+    
+    # Rows of two toggles
+    row = []
+    for key, desc_key in lock_keys.items():
+        value = locks.get(key, 0)
+        desc, kb = build_toggle_row(chat_id, f"lock_{key}", value, desc_key, target_id)
+        
+        # Add the toggle button, ignoring the descriptive part of kb
+        row.append(kb[0]) 
+        
+        # Every two buttons forms a row (or the last one alone)
+        if len(row) == 2:
+            keyboard.add(*row)
+            row = []
+        
+        # The description line is added outside the loop based on the descriptive kb part
+        desc_lines.append(desc) 
+    
+    if row:
+        keyboard.add(*row)
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_xp_system_menu(chat_id, target_id):
+    """Builds the XP system main menu."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'xp_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'xp_settings'), callback_data=f"menu:{target_id}:xp_settings"),
+        types.InlineKeyboardButton(_(chat_id_str, 'leaderboard'), callback_data=f"xp:{target_id}:leaderboard")
+    )
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'my_rank'), callback_data=f"xp:{target_id}:my_rank")
+    )
+
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_xp_settings_menu(chat_id, menu_data, target_id):
+    """Builds the XP Settings sub-menu (Point 4)."""
+    chat_id_str = str(chat_id)
+    xp_settings = menu_data.get('xp_settings', {})
+    
+    desc_lines = [_(chat_id_str, 'xp_settings_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # XP Enabled Toggle
+    # Note: 'xp_enabled' toggle uses 'menu:xp_settings:xp_enabled' as key, so the toggle: handler must be generic
+    xp_enabled = xp_settings.get('xp_enabled', 1) 
+    xp_desc, xp_kb = build_toggle_row(chat_id, 'menu:xp_settings:xp_enabled', xp_enabled, 'xp_enabled', target_id)
+    desc_lines.append(xp_desc)
+    keyboard.add(*xp_kb)
+
+    # Cooldown Setting
+    cooldown = xp_settings.get('xp_cooldown', 60)
+    cooldown_desc = _(chat_id_str, 'xp_cooldown_desc')
+    
+    desc_lines.append(f"\n<b>{_(chat_id_str, 'xp_cooldown')}:</b> {cooldown}s <i>({cooldown_desc})</i>")
+    
+    # Cooldown buttons (Point 4 - control)
+    keyboard.add(
+        types.InlineKeyboardButton("-10s", callback_data=f"xp:{target_id}:cooldown:-10"),
+        types.InlineKeyboardButton(f"Cool: {cooldown}s", callback_data="ignore_label"),
+        types.InlineKeyboardButton("+10s", callback_data=f"xp:{target_id}:cooldown:+10")
+    )
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_triggers_menu(chat_id, counts, target_id):
+    """Builds the Triggers menu (Point 5, 6)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'triggers_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+
+    desc_lines.append(f"<i>{_(chat_id_str, 'triggers_desc')}</i> (<b>{_(chat_id_str, 'notes')}: {counts['triggers']}</b>)")
+    
+    # Add/List buttons
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'add_trigger'), callback_data=f"trigger:{target_id}:add"),
+        types.InlineKeyboardButton(_(chat_id_str, 'list_triggers'), callback_data=f"trigger:{target_id}:list")
+    )
+    
+    # Placeholder for displaying existing triggers (Point 5)
+    # The list view will be a separate menu type (not implemented here yet)
+    desc_lines.append(f"\n💡 {_(chat_id_str, 'list_triggers')} बटन दबाकर सक्रिय ट्रिगर्स देखें।")
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_notes_menu(chat_id, counts, target_id):
+    """Builds the Notes menu (Point 6)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'notes_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    desc_lines.append(f"<i>{_(chat_id_str, 'notes_desc')}</i> (<b>{_(chat_id_str, 'notes')}: {counts['notes']}</b>)")
+
+    # Add/List buttons
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'add_note'), callback_data=f"note:{target_id}:add"),
+        types.InlineKeyboardButton(_(chat_id_str, 'list_notes'), callback_data=f"note:{target_id}:list")
+    )
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_blacklist_menu(chat_id, counts, target_id):
+    """Builds the Blacklist menu (Point 8)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'blacklist_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    desc_lines.append(f"<i>{_(chat_id_str, 'blacklist_desc')}</i> (<b>{_(chat_id_str, 'blacklist')}: {counts['blacklist']}</b>)")
+    
+    # Add/List buttons
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'add_word'), callback_data=f"blacklist:{target_id}:add"),
+        types.InlineKeyboardButton(_(chat_id_str, 'list_words'), callback_data=f"blacklist:{target_id}:list")
+    )
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_commands_menu(chat_id, target_id):
+    """Builds the Commands menu (Point 9)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'cmd_perms_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Moderation commands are fixed (Point 9)
+    desc_lines.append(f"🛡️ <b>Moderation Commands:</b> <i>/warn, /mute, /ban, /kick</i>\n   - {_(chat_id_str, 'fixed_admin_perm')}")
+    
+    # Placeholder for other custom command permission management
+    keyboard.add(
+        types.InlineKeyboardButton(f"{_(chat_id_str, 'commands')} - WIP", callback_data="unknown") 
+    )
+
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_polls_menu(chat_id, counts, target_id):
+    """Builds the Polls menu (Point 7)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'polls_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+    
+    desc_lines.append(f"<i>{_(chat_id_str, 'polls_desc')}</i> (<b>{_(chat_id_str, 'polls')}: {counts['polls']}</b>)")
+
+    # Create/Active buttons
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'create_poll'), callback_data=f"poll:{target_id}:create"),
+        types.InlineKeyboardButton(_(chat_id_str, 'active_polls'), callback_data=f"poll:{target_id}:active")
+    )
+    
+    return "\n\n".join(desc_lines), keyboard
+
+def _build_moderation_menu(chat_id):
+    """Builds the Moderation menu (Point 10)."""
+    chat_id_str = str(chat_id)
+    desc_lines = [_(chat_id_str, 'moderation_desc')]
+    keyboard = types.InlineKeyboardMarkup()
+
+    # Inform the user how to use commands
+    desc_lines.append("\n💡 <b>Usage:</b> किसी भी मैसेज को <b>reply</b> करके कमांड का उपयोग करें।\n   जैसे: <i>/warn</i>, <i>/mute 1h</i>, <i>/ban</i>")
+    
+    # Dummy buttons for visual guidance (no action, only ignore_label)
+    keyboard.add(
+        types.InlineKeyboardButton("Warn", callback_data="ignore_label"),
+        types.InlineKeyboardButton("Mute", callback_data="ignore_label"),
+        types.InlineKeyboardButton("Ban", callback_data="ignore_label"),
+        types.InlineKeyboardButton("Kick", callback_data="ignore_label")
+    )
+
+    return "\n\n".join(desc_lines), keyboard
+
+
+# ---------- Menu Rendering (Point 2, 12, 13, 18, 19) ----------
+def send_menu(chat_id, user_id, menu_type, message_id=None, is_private=False, group_title="", target_group_id=None):
+    "Generates and sends/edits the specified menu"
+    chat_id_str = str(chat_id)
+    settings = get_settings(chat_id_str)
+    
+    # Contextual chat ID for settings actions (private mode uses target_group_id)
+    # If target_group_id is provided (for private chat), use it for data fetching
+    data_chat_id = str(target_group_id) if target_group_id else chat_id_str
+    
+    # 1. Fetch data required for descriptions/menus
+    data_settings = get_settings(data_chat_id)
+    data_locks = locks_get(data_chat_id)
+    data_menu = menu_get(data_chat_id)
+    counts = _get_db_counts(data_chat_id)
+    
+    # 2. Build Menu
+    keyboard = types.InlineKeyboardMarkup()
+    
+    # Initial description line
+    if is_private and target_group_id:
+        # Private chat context for a specific group
+        title_line = _(chat_id_str, 'menu_in_private_opened', title=safe_html(group_title))
+    else:
+        # Normal main menu in group or private
+        title_line = _(chat_id_str, 'main_menu_desc')
+    
+    desc_lines = [title_line]
+    
+    # Target ID for callback data (used in sub-menus)
+    callback_target_id = f"{data_chat_id}" 
+    
+    # --- Main Menu ---
+    if menu_type == 'main':
+        
+        # [Settings] [Moderation]
+        keyboard.add(
+            types.InlineKeyboardButton(_(chat_id_str, 'settings'), callback_data=f"menu:{callback_target_id}:settings"),
+            types.InlineKeyboardButton(_(chat_id_str, 'moderation'), callback_data=f"menu:{callback_target_id}:moderation")
+        )
+        
+        # [Locks] [XP System]
+        keyboard.add(
+            types.InlineKeyboardButton(_(chat_id_str, 'locks'), callback_data=f"menu:{callback_target_id}:locks"),
+            types.InlineKeyboardButton(_(chat_id_str, 'xp_system'), callback_data=f"menu:{callback_target_id}:xp_system")
+        )
+        
+        # [Notes] [Triggers]
+        notes_btn_text = f"{_(chat_id_str, 'notes')} ({counts['notes']})"
+        triggers_btn_text = f"{_(chat_id_str, 'triggers')} ({counts['triggers']})"
+        keyboard.add(
+            types.InlineKeyboardButton(notes_btn_text, callback_data=f"menu:{callback_target_id}:notes"),
+            types.InlineKeyboardButton(triggers_btn_text, callback_data=f"menu:{callback_target_id}:triggers")
+        )
+        
+        # [Blacklist] [Commands]
+        blacklist_btn_text = f"{_(chat_id_str, 'blacklist')} ({counts['blacklist']})"
+        keyboard.add(
+            types.InlineKeyboardButton(blacklist_btn_text, callback_data=f"menu:{callback_target_id}:blacklist"),
+            types.InlineKeyboardButton(_(chat_id_str, 'commands'), callback_data=f"menu:{callback_target_id}:commands")
+        )
+        
+        # [Polls] [Language] (Point 4)
+        polls_btn_text = f"{_(chat_id_str, 'polls')} ({counts['polls']})"
+        lang_btn_text = f"🌐 {_(chat_id_str, 'language')}: {data_settings['lang'].upper()}"
+        keyboard.add(
+            types.InlineKeyboardButton(polls_btn_text, callback_data=f"menu:{callback_target_id}:polls"),
+            types.InlineKeyboardButton(lang_btn_text, callback_data=f"lang:{callback_target_id}:toggle")
+        )
+        
+    # --- Settings Menu (Point 1, 2, 19) ---
+    elif menu_type == 'settings':
+        desc, kb = _build_settings_menu(chat_id, data_settings, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard # Replace keyboard rows
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+    
+    # --- Moderation Menu (Point 10) ---
+    elif menu_type == 'moderation':
+        desc, kb = _build_moderation_menu(chat_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+
+    # --- Locks Menu (Point 5, 19) ---
+    elif menu_type == 'locks':
+        desc, kb = _build_locks_menu(chat_id, data_locks, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+        
+    # --- XP System Menu (Point 8, 19) ---
+    elif menu_type == 'xp_system':
+        desc, kb = _build_xp_system_menu(chat_id, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+
+    # --- XP Settings Sub-Menu (Point 4, 19) ---
+    elif menu_type == 'xp_settings':
+        desc, kb = _build_xp_settings_menu(chat_id, data_menu, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:xp_system"))
+
+    # --- Triggers Menu (Point 5, 19) ---
+    elif menu_type == 'triggers':
+        desc, kb = _build_triggers_menu(chat_id, counts, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+        
+    # --- Notes Menu (Point 6, 19) ---
+    elif menu_type == 'notes':
+        desc, kb = _build_notes_menu(chat_id, counts, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+
+    # --- Blacklist Menu (Point 8, 19) ---
+    elif menu_type == 'blacklist':
+        desc, kb = _build_blacklist_menu(chat_id, counts, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+
+    # --- Commands Menu (Point 9, 19) ---
+    elif menu_type == 'commands':
+        desc, kb = _build_commands_menu(chat_id, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+
+    # --- Polls Menu (Point 7, 19) ---
+    elif menu_type == 'polls':
+        desc, kb = _build_polls_menu(chat_id, counts, callback_target_id)
+        desc_lines.append(desc)
+        keyboard.keyboard = kb.keyboard
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{callback_target_id}:main"))
+        
+    # --- Fallback/Unknown Menu ---
+    else:
+        desc_lines.append(_(chat_id_str, 'unknown_action'))
+        keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'main_menu'), callback_data=f"menu:{callback_target_id}:main"))
+        
+    # Final message assembly
+    menu_text = "\n\n".join(desc_lines)
+    
+    try:
+        if message_id:
+            # Edit existing message
+            bot.edit_message_text(
+                menu_text,
+                chat_id,
+                message_id,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            # Send new message
+            bot.send_message(
+                chat_id,
+                menu_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        # Handle message not modified error
+        if 'message is not modified' in str(e):
+            logging.info(f"Menu not modified: {menu_type} in {chat_id}")
+        else:
+            logging.error(f"Error sending/editing menu: {e}")
+
+
+# ----------------------------------------------------------------------
+# -------------------- Telegram Message Handlers (Continued) -------------
+# ----------------------------------------------------------------------
+
+# ---------- Commands: /start and /menu (Point 12, 13) ----------
+@bot.message_handler(commands=['start', 'menu'])
+def handle_start_menu(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    # If started in private with payload like manage_<chat_id> -> open private settings for that group
-    parts = (message.text or "").split()
-    payload = parts[1] if len(parts) > 1 else ""
+    
+    # 1. Private Chat Flow
     if message.chat.type == 'private':
-        # If payload present and matches manage_ we open private group settings page
-        if payload.startswith("manage_"):
-            target = payload.split("_",1)[1]
-            # Only allow group creators/admins to open group's private view. Verify if user is admin in that group.
-            try:
-                if is_user_admin(target, user_id):
-                    send_menu(target, user_id=user_id, private=True)
-                    return
-                else:
-                    bot.reply_to(message, _(chat_id, 'admin_only'))
-                    return
-            except Exception:
-                logging.exception("start.manage failed")
-        # Regular private start: show welcome text (no "go to private" button)
-        bot.send_message(chat_id, _(chat_id, 'start_private'))
-        return
-    else:
-        # Group start: show group-specific setup and "Open in private chat" button when appropriate
-        if not bot_is_admin(chat_id):
-            # Bot is not admin - encourage to promote
-            kb = types.InlineKeyboardMarkup()
-            kb.add(btn(_(chat_id, 'menu_in_private_button'), url=f"https://t.me/{BOT_USERNAME}?start=manage_{chat_id}"))
-            bot.send_message(chat_id, _(chat_id, 'start_group_not_admin'), reply_markup=kb)
+        # If the command includes a target group ID (e.g., /start -123456789)
+        # This happens when the user clicks 'Open in private' button from a group.
+        try:
+            target_group_id = message.text.split()[1]
+            if target_group_id.startswith('-100'):
+                # Try to get group info for title
+                try:
+                    group_info = bot.get_chat(target_group_id)
+                    group_title = group_info.title
+                except:
+                    group_title = target_group_id
+                    
+                # User is managing a specific group's settings privately
+                send_menu(chat_id, user_id, 'main', is_private=True, group_title=group_title, target_group_id=target_group_id)
+                return
+        except IndexError:
+            # Normal /start in private chat (Point 12 - do NOT show "Go in private chat")
+            bot.send_message(
+                chat_id, 
+                _(chat_id, 'start_private'), 
+                disable_web_page_preview=True
+            )
             return
-        # If group creator used /start in group, show button to open private config
-        kb = types.InlineKeyboardMarkup()
-        kb.add(btn(_(chat_id, 'menu_in_private_button'), url=f"https://t.me/{BOT_USERNAME}?start=manage_{chat_id}"))
-        bot.send_message(chat_id, _(chat_id, 'main_menu'), reply_markup=kb)
-        return
 
-# ---------- Callback Query Handler ----------
+    # 2. Group Chat Flow (or Supergroup)
+    if message.chat.type in ['group', 'supergroup']:
+        chat_id_str = str(chat_id)
+        
+        # Check bot permissions
+        permissions = check_bot_permissions(chat_id)
+        is_admin = permissions.get('is_admin', False)
+        
+        # Check if the user running the command is the group creator (Point 13)
+        is_creator = is_creator_member(chat_id, user_id)
+        
+        # Initial message text
+        menu_text = _(chat_id_str, 'main_menu_desc')
+        keyboard = types.InlineKeyboardMarkup()
+        
+        if not is_admin:
+            # Bot is not admin (show setup message/button)
+            menu_text = _(chat_id_str, 'start_group_not_admin')
+            # Add a button to easily find the bot (optional, but good UX)
+            keyboard.add(
+                 types.InlineKeyboardButton("➕ Add Bot as Admin", url=f"https://t.me/{BOT_USERNAME}?startgroup=start")
+            )
+            bot.send_message(chat_id, menu_text, reply_markup=keyboard)
+            return
+
+        # Bot is admin, show main menu
+        if is_creator:
+            # Group creator can see the main menu directly in the group, 
+            # and gets an option to move to private chat (Point 12)
+            
+            # 1. Build the main menu
+            # Send as new message if /start, edit if /menu (if message_id is available)
+            send_menu(chat_id, user_id, 'main') 
+            
+            # 2. Add the private chat prompt/button (Point 13)
+            private_kb = types.InlineKeyboardMarkup()
+            # Callback is handled by Telegram's deep-linking /start command
+            private_link = f"https://t.me/{BOT_USERNAME}?start={chat_id_str}"
+            private_kb.add(
+                types.InlineKeyboardButton(_(chat_id_str, 'menu_in_private_button'), url=private_link)
+            )
+            
+            # Send the prompt separately
+            bot.send_message(
+                chat_id,
+                f"<i>{_(chat_id_str, 'menu_in_private_prompt')}</i>",
+                reply_markup=private_kb,
+                parse_mode="HTML"
+            )
+            
+        else:
+            # Regular admin/user in group: show a simple message that only the creator can access settings
+            bot.reply_to(message, _(chat_id_str, 'admin_only'))
+            
+# ---------- Callback Inline Handler (Point 3, 15, 16, 17) ----------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_inline(call):
-    """
-    Central callback handler. Parses callback_data and routes to specific functions.
-    Supported patterns:
-     - menu:<name>
-     - toggle:<key>
-     - toggle:options:<key>
-     - lang:toggle
-     - trigger:add|del|edit|enable|disable:...
-     - note:add|list|del
-     - poll:..., blacklist:add|del, xp:settings, etc.
-    """
-    data = call.data or ""
-    chat_id = call.message.chat.id if call.message else None
+    chat_id = call.message.chat.id
     user_id = call.from_user.id
-    logging.info(f"callback from {user_id} data={data}")
+    message_id = call.message.message_id
+    data = call.data
+    
+    # Logging the callback (Point 17)
+    logging.info(f"Callback from {user_id} in {chat_id}: {data}")
 
-    # Helper to answer callback quickly
-    def ack(text=None, show_alert=False):
-        try:
-            bot.answer_callback_query(call.id, text or "", show_alert=show_alert)
-        except:
-            pass
+    # --- Pre-Check: Admin/Creator check ---
+    # In private chat, the user must be the creator of the target group
+    # Format: action:target_id:key:value
+    
+    # Parse data: [action, target_id, ...]
+    parts = data.split(':')
+    action = parts[0]
+    
+    # Determine the chat ID where settings are applied (target_id)
+    # If in private chat, the target_id is the group's chat_id
+    target_id = parts[1] if len(parts) > 1 and parts[1].startswith('-') else str(chat_id)
 
-    # Menu navigation
-    if data.startswith("menu:"):
-        cmd = data.split(":",1)[1]
-        if cmd == "settings":
-            show_settings_menu(call)
-            ack()
+    # If in private chat mode (target_id is a group ID), check if user is creator of that group
+    if str(chat_id).startswith('-') and target_id == str(chat_id):
+        # User clicked a button in a group, target is the same group
+        is_allowed = is_creator_member(chat_id, user_id)
+        if not is_allowed:
+            bot.answer_callback_query(call.id, _(chat_id, 'admin_only'), show_alert=True)
             return
-        if cmd == "moderation":
-            show_moderation_menu(call)
-            ack()
+    elif str(chat_id).startswith('-') and target_id.startswith('-'):
+        # User clicked a button in a group, but target_id is different (shouldn't happen with current flow)
+        is_allowed = is_creator_member(target_id, user_id)
+        if not is_allowed:
+            bot.answer_callback_query(call.id, _(target_id, 'admin_only'), show_alert=True)
             return
-        if cmd == "locks":
-            show_locks_menu(call)
-            ack()
+    elif not str(chat_id).startswith('-') and target_id.startswith('-'):
+        # User clicked a button in private chat, target is a group (Must be creator of target_id)
+        is_allowed = is_creator_member(target_id, user_id)
+        if not is_allowed:
+            bot.answer_callback_query(call.id, _(target_id, 'admin_only'), show_alert=True)
             return
-        if cmd == "notes":
-            show_notes_menu(call)
-            ack()
-            return
-        if cmd == "triggers":
-            show_triggers_menu(call)
-            ack()
-            return
-        if cmd == "xp_settings":
-            show_xp_settings_menu(call)
-            ack()
-            return
-        if cmd == "polls":
-            show_polls_menu(call)
-            ack()
-            return
-        if cmd == "blacklist":
-            show_blacklist_menu(call)
-            ack()
-            return
-        if cmd == "back":
-            # go to main menu
-            send_menu(chat_id)
-            ack()
+    elif not str(chat_id).startswith('-') and target_id == str(chat_id):
+        # User clicked a button in private chat, target is private chat itself (like language toggle)
+        is_allowed = True # Always allowed in private chat
+    else:
+        # User clicked a button in a group, target is the same group (Standard check)
+        is_allowed = is_admin_member(chat_id, user_id)
+        if not is_allowed:
+            bot.answer_callback_query(call.id, _(chat_id, 'admin_only'), show_alert=True)
             return
 
-    # Language toggle
-    if data == "lang:toggle":
-        # toggle between hi and en
-        row = get_settings(chat_id)
-        cur = row.get('lang', 'hi')
-        new = 'en' if cur == 'hi' else 'hi'
-        set_setting(chat_id, 'lang', new)
-        logging.info(f"Language changed for {chat_id} -> {new} by {user_id}")
-        # update the message instantly
-        try:
-            bot.edit_message_text(_(chat_id, 'main_menu'), chat_id, call.message.message_id, reply_markup=None, parse_mode="HTML")
-        except Exception:
-            pass
-        ack(_(chat_id, 'lang_changed'))
+
+    # --- Ignore Label ---
+    if data == 'ignore_label':
+        bot.answer_callback_query(call.id, "")
+        return
+        
+    # --- Menu Navigation (Point 2) ---
+    if action == 'menu':
+        menu_type = parts[2]
+        # In private chat context, need to pass group title for re-rendering the header
+        group_title = ""
+        if not str(chat_id).startswith('-'):
+            try:
+                group_title = bot.get_chat(target_id).title
+            except:
+                pass
+
+        send_menu(chat_id, user_id, menu_type, message_id=message_id, is_private=True, group_title=group_title, target_group_id=target_id)
+        bot.answer_callback_query(call.id)
         return
 
-    # Toggle boolean keys
-    if data.startswith("toggle:"):
-        parts = data.split(":")
-        # toggle:key OR toggle:options:key
-        if len(parts) == 2:
-            key = parts[1]
-            # fetch menu_json and toggle key
-            menu = menu_get(chat_id)
-            cur = menu.get(key, False)
-            menu[key] = not cur
-            menu_set(chat_id, menu)
-            logging.info(f"Toggled {key} in {chat_id} -> {menu[key]} by {user_id}")
-            ack(_(chat_id, 'setting_updated'))
-            # refresh the relevant menu: stay on same menu
-            send_menu(chat_id)
-            return
-        elif len(parts) == 3 and parts[1] == 'options':
-            key = parts[2]
-            # show options for the toggle key
-            show_toggle_options(call, key)
-            ack()
-            return
+    # --- Language Toggle (Point 3, 15) ---
+    elif action == 'lang':
+        old_lang = get_settings(target_id).get('lang', 'hi')
+        new_lang = 'en' if old_lang == 'hi' else 'hi'
+        set_setting(target_id, 'lang', new_lang)
+        
+        # Log language change
+        log_action(target_id, user_id, f"lang_change:{new_lang}")
+        
+        # Re-render the menu instantly
+        send_menu(chat_id, user_id, 'main', message_id=message_id, target_group_id=target_id)
+        bot.answer_callback_query(call.id, _(target_id, 'lang_changed'))
+        return
 
-    # Notes: add/list/delete
-    if data.startswith("note:"):
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ''
-        if action == 'list':
-            list_notes(call)
-            ack()
-            return
-        if action == 'add':
-            # begin conversation: ask user to send "key|content"
-            bot.send_message(call.from_user.id, _(chat_id, 'add_note') + "\nFormat: key | content")
-            STATE[(call.from_user.id, 'adding_note')] = {'chat_id': chat_id}
-            ack()
-            return
-        if action == 'del':
-            # delete specific note provided as third part
-            key = parts[2] if len(parts) > 2 else None
-            if not key:
-                ack(_(chat_id, 'invalid_input'), True)
-                return
-            conn = db()
-            c = conn.cursor()
-            c.execute("DELETE FROM notes WHERE chat_id=? AND key=?", (str(chat_id), key))
-            conn.commit()
-            conn.close()
-            ack(_(chat_id, 'note_deleted', key=key))
-            send_menu(chat_id)
-            return
-
-    # Triggers: add/list/delete/enable/disable
-    if data.startswith("trigger:"):
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ''
-        if action == 'list':
-            list_triggers(call)
-            ack()
-            return
-        if action == 'add':
-            bot.send_message(call.from_user.id, _(chat_id, 'add_trigger') + "\nFormat: pattern | reply")
-            STATE[(call.from_user.id, 'adding_trigger')] = {'chat_id': chat_id}
-            ack()
-            return
-        if action in ['del','enable','disable']:
-            # expected: trigger:del:<id> or trigger:enable:<id>
-            if len(parts) < 3:
-                ack(_(chat_id, 'invalid_input'), True)
-                return
-            trig_id = parts[2]
+    # --- Generic Toggle Handler (Point 1, 3, 16) ---
+    elif action == 'toggle':
+        # Data format: toggle:[target_id]:[key]:[new_value]
+        key = parts[2]
+        value = int(parts[3])
+        
+        setting_key = key
+        
+        # Check if it's a menu_json key (e.g., menu:xp_settings:xp_enabled)
+        if key.startswith('menu:'):
+            # Format: menu:submenu:setting_key
+            _, submenu, setting_key = key.split(':') 
+            menu_data = menu_get(target_id)
+            if submenu not in menu_data:
+                menu_data[submenu] = {}
+            menu_data[submenu][setting_key] = value
+            menu_set(target_id, menu_data)
+            menu_type = submenu # Use submenu to re-render the correct view
+        
+        # Check if it's a lock setting (e.g., lock_urls)
+        elif key.startswith('lock_'):
+            lock_key = key.replace('lock_', '')
+            locks_data = locks_get(target_id)
+            locks_data[lock_key] = value
+            locks_set(target_id, locks_data)
+            menu_type = 'locks' # Use 'locks' to re-render
+            
+        # Standard settings (e.g., welcome_enabled)
+        else:
+            set_setting(target_id, setting_key, value)
+            menu_type = 'settings' # Use 'settings' to re-render
+        
+        # Log the action (Point 17)
+        log_action(target_id, user_id, f"toggle:{key}:{value}")
+        
+        # Re-render the menu instantly
+        # If in private chat, target_id is the group.
+        group_title = ""
+        if not str(chat_id).startswith('-'):
             try:
+                group_title = bot.get_chat(target_id).title
+            except:
+                pass
+                
+        send_menu(chat_id, user_id, menu_type, message_id=message_id, is_private=True, group_title=group_title, target_group_id=target_id)
+        bot.answer_callback_query(call.id, _(target_id, 'setting_updated'))
+        return
+
+    # --- XP Cooldown Change (Point 4) ---
+    elif action == 'xp':
+        sub_action = parts[2]
+        
+        if sub_action == 'cooldown':
+            change = int(parts[3])
+            
+            menu_data = menu_get(target_id)
+            xp_settings = menu_data.get('xp_settings', {})
+            current_cooldown = xp_settings.get('xp_cooldown', 60)
+            
+            new_cooldown = max(5, current_cooldown + change) # Minimum 5 seconds
+            
+            xp_settings['xp_cooldown'] = new_cooldown
+            menu_data['xp_settings'] = xp_settings
+            menu_set(target_id, menu_data)
+            
+            log_action(target_id, user_id, f"xp_cooldown:{new_cooldown}")
+            
+            # Re-render XP settings menu
+            send_menu(chat_id, user_id, 'xp_settings', message_id=message_id, target_group_id=target_id)
+            bot.answer_callback_query(call.id, _(target_id, 'setting_updated'))
+            return
+
+        elif sub_action == 'leaderboard' or sub_action == 'my_rank':
+            # Basic implementation for now (Point 4 - functional)
+            
+            if sub_action == 'my_rank':
+                # Get rank and XP for the user who clicked the button (user_id)
+                rank, xp = get_rank(target_id, user_id)
+                user_info = bot.get_chat_member(target_id, user_id).user
+                name = get_user_display_name(user_info)
+                
+                response_text = _(target_id, 'rank_display', name=safe_html(name), rank=rank, xp=xp)
+                bot.answer_callback_query(call.id, response_text, show_alert=True)
+                return
+            
+            elif sub_action == 'leaderboard':
+                # Fetch leaderboard
                 conn = db()
                 c = conn.cursor()
-                if action == 'del':
-                    c.execute("DELETE FROM triggers WHERE id=? AND chat_id=?", (int(trig_id), str(chat_id)))
-                else:
-                    # Use triggers_meta in menu_json for enabled/disabled
-                    menu = menu_get(chat_id)
-                    meta = menu.get('triggers_meta', {})
-                    ent = meta.get(str(trig_id), {})
-                    ent['enabled'] = (action == 'enable')
-                    meta[str(trig_id)] = ent
-                    menu['triggers_meta'] = meta
-                    menu_set(chat_id, menu)
-                conn.commit()
+                c.execute("SELECT user_id, points FROM xp WHERE chat_id=? ORDER BY points DESC LIMIT 10", 
+                          (target_id,))
+                leaderboard = c.fetchall()
                 conn.close()
-                ack(_(chat_id, 'setting_updated'))
-                send_menu(chat_id)
-            except Exception:
-                logging.exception("trigger action failed")
-                ack(_(chat_id, 'error_occurred'))
-            return
-
-    # XP settings: open or modify
-    if data.startswith("xp:"):
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ''
-        menu = menu_get(chat_id)
-        xp_meta = menu.get('xp_settings', {"xp_enabled": True, "xp_cooldown": 10})
-        if action == 'settings':
-            show_xp_settings_menu(call)
-            ack()
-            return
-        if action == 'toggle':
-            xp_meta['xp_enabled'] = not xp_meta.get('xp_enabled', True)
-            menu['xp_settings'] = xp_meta
-            menu_set(chat_id, menu)
-            ack(_(chat_id, 'setting_updated'))
-            show_xp_settings_menu(call)
-            return
-        if action == 'cooldown_increase':
-            xp_meta['xp_cooldown'] = min(3600, xp_meta.get('xp_cooldown',10) + 5)
-            menu['xp_settings'] = xp_meta
-            menu_set(chat_id, menu)
-            ack(_(chat_id, 'setting_updated'))
-            show_xp_settings_menu(call)
-            return
-        if action == 'cooldown_decrease':
-            xp_meta['xp_cooldown'] = max(1, xp_meta.get('xp_cooldown',10) - 5)
-            menu['xp_settings'] = xp_meta
-            menu_set(chat_id, menu)
-            ack(_(chat_id, 'setting_updated'))
-            show_xp_settings_menu(call)
-            return
-
-    # Blacklist add/delete
-    if data.startswith("blacklist:"):
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ''
-        if action == 'add':
-            bot.send_message(call.from_user.id, _(chat_id, 'add_word') + "\nSend the word to blacklist")
-            STATE[(call.from_user.id, 'adding_blacklist')] = {'chat_id': chat_id}
-            ack()
-            return
-        if action == 'list':
-            list_blacklist(call)
-            ack()
-            return
-        if action == 'del':
-            word = parts[2] if len(parts) > 2 else None
-            if not word:
-                ack(_(chat_id, 'invalid_input'), True)
+                
+                # Build leaderboard message
+                lb_text = "🏆 <b>Top 10 Leaderboard</b> 🏆\n\n"
+                for i, row in enumerate(leaderboard):
+                    try:
+                        member = bot.get_chat_member(target_id, row['user_id'])
+                        name = get_user_display_name(member.user)
+                    except:
+                        name = f"User {row['user_id']}"
+                        
+                    lb_text += f"#{i+1}: {safe_html(name)} - {row['points']} XP\n"
+                    
+                if not leaderboard:
+                    lb_text += "No XP data yet."
+                    
+                bot.answer_callback_query(call.id, "Leaderboard fetched.", show_alert=False)
+                bot.send_message(chat_id, lb_text)
                 return
+
+    # --- Other Modules (Notes, Triggers, Blacklist, Polls) - Basic Wiring ---
+    # These will initiate multi-step STATE flow or list functions (Point 3, 5, 6, 7, 8)
+    elif action in ['note', 'trigger', 'blacklist', 'poll']:
+        sub_action = parts[2]
+        
+        # Example: Initiating 'add' flow (which requires state handling)
+        if sub_action == 'add' or sub_action == 'create':
+            # Set state for the next user message to be captured
+            STATE[(chat_id, user_id)] = {'action': f'{action}_wait_for_key', 'target_id': target_id}
+            
+            if action == 'note':
+                prompt = _(target_id, 'usage', usage="Note key और content भेजें, जैसे: <code>!rules The group rules are...</code>")
+            elif action == 'trigger':
+                prompt = _(target_id, 'usage', usage="Trigger pattern और reply भेजें, जैसे: <code>!hello Hi there!</code>")
+            elif action == 'blacklist':
+                prompt = _(target_id, 'usage', usage="ब्लैकलिस्ट करने के लिए शब्द भेजें। एक समय में एक शब्द।")
+            elif action == 'poll':
+                prompt = _(target_id, 'usage', usage="Poll का प्रश्न और विकल्पों को नई लाइन में भेजें। \nउदाहरण: \n<code>Favourite colour?\nRed\nBlue\nGreen</code>")
+            else:
+                prompt = _(target_id, 'invalid_input')
+                
+            bot.send_message(chat_id, prompt)
+            bot.answer_callback_query(call.id, f"Waiting for {action} input...")
+            return
+            
+        # Example: Listing flow (requires fetching data)
+        elif sub_action == 'list' or sub_action == 'active':
+            # Placeholder for listing logic (to be expanded in subsequent parts)
+            list_text = f"📋 {action.capitalize()} List (WIP)\n"
+            
             conn = db()
             c = conn.cursor()
-            c.execute("DELETE FROM blacklist WHERE chat_id=? AND word=?", (str(chat_id), word))
-            conn.commit()
+            
+            if action == 'note':
+                c.execute("SELECT key, content FROM notes WHERE chat_id=?", (target_id,))
+                for row in c.fetchall():
+                    list_text += f"<b>{safe_html(row['key'])}</b>: {safe_html(row['content'][:30])}...\n"
+                
+            elif action == 'trigger':
+                c.execute("SELECT pattern, reply FROM triggers WHERE chat_id=?", (target_id,))
+                for row in c.fetchall():
+                    list_text += f"<b>{safe_html(row['pattern'])}</b>: {safe_html(row['reply'][:30])}...\n"
+            
+            elif action == 'blacklist':
+                c.execute("SELECT word FROM blacklist WHERE chat_id=?", (target_id,))
+                words = [row['word'] for row in c.fetchall()]
+                list_text += ", ".join(words)
+            
+            elif action == 'poll':
+                c.execute("SELECT id, question FROM polls WHERE chat_id=? AND open=1", (target_id,))
+                for row in c.fetchall():
+                    list_text += f"<b>ID {row['id']}</b>: {safe_html(row['question'][:50])}...\n"
+                
             conn.close()
-            ack(_(chat_id, 'setting_updated'))
-            send_menu(chat_id)
+            
+            bot.send_message(chat_id, list_text)
+            bot.answer_callback_query(call.id, f"Listing {action}s...")
             return
 
-    # Poll actions (simple open/close)
-    if data.startswith("poll:"):
-        parts = data.split(":")
-        action = parts[1] if len(parts) > 1 else ''
-        if action == 'create':
-            bot.send_message(call.from_user.id, _(chat_id, 'create_poll') + "\nFormat: question | option1;option2;option3")
-            STATE[(call.from_user.id, 'creating_poll')] = {'chat_id': chat_id}
-            ack()
-            return
-        if action == 'list':
-            list_polls(call)
-            ack()
-            return
-        if action in ['close','open']:
-            poll_id = parts[2] if len(parts) > 2 else None
-            if not poll_id:
-                ack(_(chat_id, 'invalid_input'))
-                return
-            conn = db()
-            c = conn.cursor()
-            if action == 'close':
-                c.execute("UPDATE polls SET open=0 WHERE id=? AND chat_id=?", (int(poll_id), str(chat_id)))
-            else:
-                c.execute("UPDATE polls SET open=1 WHERE id=? AND chat_id=?", (int(poll_id), str(chat_id)))
-            conn.commit()
-            conn.close()
-            ack(_(chat_id, 'setting_updated'))
-            send_menu(chat_id)
-            return
-
-    # Fallback: unknown action
-    logging.warning(f"Unknown callback action: {data}")
-    try:
-        bot.answer_callback_query(call.id, _(chat_id, 'unknown_action'), show_alert=True)
-    except:
-        pass
-
-# ---------- Menu Sub-views Implementations ----------
-def show_settings_menu(call):
-    chat_id = call.message.chat.id
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        btn(f"{_(chat_id,'locks')}", callback_data=f"menu:locks"),
-        btn(f"{_(chat_id,'commands')}", callback_data=f"menu:commands")
-    )
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'settings')}</b>\n{_(chat_id,'settings_desc')}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_moderation_menu(call):
-    chat_id = call.message.chat.id
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        btn("⚠️ Warn", callback_data=f"mod:warn"),
-        btn("🔇 Mute", callback_data=f"mod:mute")
-    )
-    kb.add(
-        btn("🚫 Ban", callback_data=f"mod:ban"),
-        btn("👢 Kick", callback_data=f"mod:kick")
-    )
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'moderation')}</b>\n{_(chat_id,'moderation_desc')}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_locks_menu(call):
-    chat_id = call.message.chat.id
-    locks = locks_get(chat_id)
-    # default locks
-    def lock_val(k): return locks.get(k, False)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    # build rows using build_toggle_row
-    for key_label, key in [(_('lock_urls','lock_urls'), 'lock_urls'), ('🖼️ Photos','lock_photos'), ('🎥 Videos','lock_videos'), ('👾 Stickers','lock_stickers')]:
-        # Using consistent callbacks
-        state = lock_val(key)
-        state_text = _(chat_id, 'enabled') if state else _(chat_id, 'disabled')
-        kb.add(btn(f"{state_text} {key_label}", callback_data=f"lock:toggle:{key}"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'locks')}</b>\n{_(chat_id,'locks_desc')}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_notes_menu(call):
-    chat_id = call.message.chat.id
-    notes_count = count_notes(chat_id)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(btn(_(chat_id,'add_note'), callback_data="note:add"), btn(_(chat_id,'list_notes', count=notes_count), callback_data="note:list"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'notes')}</b>\n{_(chat_id,'notes_desc', count=notes_count)}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_triggers_menu(call):
-    chat_id = call.message.chat.id
-    triggers_count = count_triggers(chat_id)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(btn(_(chat_id,'add_trigger'), callback_data="trigger:add"), btn(f"📋 List ({triggers_count})", callback_data="trigger:list"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'triggers')}</b>\n{_(chat_id,'triggers_desc', count=triggers_count)}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_xp_settings_menu(call):
-    chat_id = call.message.chat.id
-    menu = menu_get(chat_id)
-    xp_meta = menu.get('xp_settings', {"xp_enabled": True, "xp_cooldown": 10})
-    kb = types.InlineKeyboardMarkup(row_width=3)
-    # State-first button
-    state_text = _(chat_id, 'enabled') if xp_meta.get('xp_enabled', True) else _(chat_id, 'disabled')
-    kb.add(btn(f"{state_text} {_(chat_id,'xp_enabled')}", callback_data="xp:toggle"))
-    # cooldown controls
-    kb.add(
-        btn("➖", callback_data="xp:cooldown_decrease"),
-        btn(f"{_(chat_id,'xp_cooldown')}: {xp_meta.get('xp_cooldown',10)}s", callback_data="xp:settings"),
-        btn("➕", callback_data="xp:cooldown_increase")
-    )
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'xp_settings')}</b>\n{_(chat_id,'xp_settings_desc')}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_polls_menu(call):
-    chat_id = call.message.chat.id
-    polls_count = count_polls(chat_id)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(btn(_(chat_id,'create_poll'), callback_data="poll:create"), btn(_(chat_id,'active_polls', count=polls_count), callback_data="poll:list"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'polls')}</b>\n{_(chat_id,'polls_desc', count=polls_count)}", chat_id, call.message.message_id, reply_markup=kb)
-
-def show_blacklist_menu(call):
-    chat_id = call.message.chat.id
-    bl_count = count_blacklist(chat_id)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(btn(_(chat_id,'add_word'), callback_data="blacklist:add"), btn(f"📋 List ({bl_count})", callback_data="blacklist:list"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text(f"<b>{_(chat_id,'blacklist')}</b>\n{_(chat_id,'blacklist_desc', count=bl_count)}", chat_id, call.message.message_id, reply_markup=kb)
-
-# ---------- Listing Helpers ----------
-def list_notes(call):
-    chat_id = call.message.chat.id
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, key FROM notes WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        bot.answer_callback_query(call.id, "No notes found.", show_alert=True)
-        return
-    # build message
-    lines = ["<b>Notes</b>"]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for r in rows:
-        lines.append(f"- {safe_html(r['key'])}")
-        kb.add(btn(f"🗑️ {r['key']}", callback_data=f"note:del:{r['key']}"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-
-def list_triggers(call):
-    chat_id = call.message.chat.id
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, pattern, reply FROM triggers WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        bot.answer_callback_query(call.id, "No triggers.", show_alert=True)
-        return
-    lines = ["<b>Triggers</b>"]
-    kb = types.InlineKeyboardMarkup(row_width=3)
-    menu = menu_get(chat_id)
-    meta = menu.get('triggers_meta', {})
-    for r in rows:
-        tid = r['id']
-        ent = meta.get(str(tid), {"enabled": True})
-        state_text = _(chat_id, 'enabled') if ent.get('enabled', True) else _(chat_id, 'disabled')
-        lines.append(f"- [{state_text}] {safe_html(r['pattern'])} -> {safe_html(r['reply'])}")
-        # buttons: state toggle | delete
-        kb.add(btn(state_text, callback_data=f"trigger:{'enable' if not ent.get('enabled', True) else 'disable'}:{tid}"),
-               btn("🗑️", callback_data=f"trigger:del:{tid}"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-
-def list_blacklist(call):
-    chat_id = call.message.chat.id
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        bot.answer_callback_query(call.id, "No blacklist entries.", show_alert=True)
-        return
-    lines = ["<b>Blacklist</b>"]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for r in rows:
-        lines.append(f"- {safe_html(r['word'])}")
-        kb.add(btn(f"🗑️ {r['word']}", callback_data=f"blacklist:del:{r['word']}"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-
-def list_polls(call):
-    chat_id = call.message.chat.id
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, question, options_json, open FROM polls WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        bot.answer_callback_query(call.id, "No polls.", show_alert=True)
-        return
-    lines = ["<b>Polls</b>"]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for r in rows:
-        status = "Open" if r['open'] else "Closed"
-        lines.append(f"- ({status}) {safe_html(r['question'])}")
-        # add action button to toggle open/close
-        action = "close" if r['open'] else "open"
-        kb.add(btn(f"{action.title()}", callback_data=f"poll:{action}:{r['id']}"))
-    kb.add(btn(_(chat_id,'back'), callback_data="menu:back"))
-    bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-
-# ---------- Message Handlers for Multi-step states ----------
-@bot.message_handler(func=lambda m: (m.from_user.id, 'adding_note') in STATE, content_types=['text'])
-def handle_adding_note(message):
-    key = message.text.split("|",1)[0].strip() if "|" in message.text else None
-    content = message.text.split("|",1)[1].strip() if "|" in message.text else None
-    st = STATE.pop((message.from_user.id, 'adding_note'), None)
-    if not st or not key or not content:
-        bot.reply_to(message, _(message.chat.id, 'invalid_input'))
-        return
-    chat_id = st['chat_id']
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO notes (chat_id, key, content, created_at) VALUES (?, ?, ?, ?)", (str(chat_id), key, content, now_ts()))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, _(chat_id, 'note_added', key=key))
-    # notify group optionally
-    try:
-        bot.send_message(chat_id, f"📝 Note added: {safe_html(key)}")
-    except:
-        pass
-
-@bot.message_handler(func=lambda m: (m.from_user.id, 'adding_trigger') in STATE, content_types=['text'])
-def handle_adding_trigger(message):
-    st = STATE.pop((message.from_user.id, 'adding_trigger'), None)
-    if not st:
-        bot.reply_to(message, _(message.chat.id, 'invalid_input'))
-        return
-    chat_id = st['chat_id']
-    if "|" not in message.text:
-        bot.reply_to(message, _(chat_id, 'invalid_input'))
-        return
-    pattern, reply = [p.strip() for p in message.text.split("|",1)]
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO triggers (chat_id, pattern, reply) VALUES (?, ?, ?)", (str(chat_id), pattern, reply))
-    conn.commit()
-    trig_id = c.lastrowid
-    conn.close()
-    # default triggers_meta enabled
-    menu = menu_get(chat_id)
-    meta = menu.get('triggers_meta', {})
-    meta[str(trig_id)] = {"enabled": True, "match_type": "text"}
-    menu['triggers_meta'] = meta
-    menu_set(chat_id, menu)
-    bot.reply_to(message, _(chat_id, 'trigger_added'))
-    try:
-        bot.send_message(chat_id, f"🤖 Trigger added: {safe_html(pattern)}")
-    except:
-        pass
-
-@bot.message_handler(func=lambda m: (m.from_user.id, 'adding_blacklist') in STATE, content_types=['text'])
-def handle_adding_blacklist(message):
-    st = STATE.pop((message.from_user.id, 'adding_blacklist'), None)
-    if not st:
-        bot.reply_to(message, _(message.chat.id, 'invalid_input'))
-        return
-    chat_id = st['chat_id']
-    word = message.text.strip()
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO blacklist (chat_id, word) VALUES (?, ?)", (str(chat_id), word))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, f"✅ Blacklist word added: {safe_html(word)}")
-    try:
-        bot.send_message(chat_id, f"🚫 Word blacklisted: {safe_html(word)}")
-    except:
-        pass
-
-@bot.message_handler(func=lambda m: (m.from_user.id, 'creating_poll') in STATE, content_types=['text'])
-def handle_creating_poll(message):
-    st = STATE.pop((message.from_user.id, 'creating_poll'), None)
-    if not st:
-        bot.reply_to(message, _(message.chat.id, 'invalid_input'))
-        return
-    chat_id = st['chat_id']
-    if "|" not in message.text:
-        bot.reply_to(message, _(chat_id, 'invalid_input'))
-        return
-    q, opts = [p.strip() for p in message.text.split("|",1)]
-    options = [o.strip() for o in opts.split(";") if o.strip()]
-    if len(options) < 2:
-        bot.reply_to(message, _(chat_id, 'invalid_input'))
-        return
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO polls (chat_id, question, options_json, multiple, open, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-              (str(chat_id), q, json.dumps(options, ensure_ascii=False), 0, 1, now_ts()))
-    conn.commit()
-    conn.close()
-    bot.reply_to(message, _(chat_id, 'poll_created'))
-    try:
-        # send a Telegram native poll to the group
-        bot.send_poll(chat_id, q, options, is_anonymous=False)
-    except:
-        pass
-
-# ---------- Lock toggle handling (simple) ----------
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("lock:"))
-def handle_lock_callbacks(call):
-    data = call.data
-    chat_id = call.message.chat.id
-    parts = data.split(":")
-    if len(parts) >= 3 and parts[1] == 'toggle':
-        key = parts[2]
-        locks = locks_get(chat_id)
-        locks[key] = not locks.get(key, False)
-        locks_set(chat_id, locks)
-        bot.answer_callback_query(call.id, _(chat_id, 'setting_updated'))
-        show_locks_menu(call)
-        return
-
-# ---------- Moderation (reaction buttons) ----------
-@bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("mod:"))
-def handle_mod_callbacks(call):
-    data = call.data
-    chat_id = call.message.chat.id
-    user_id = call.from_user.id
-    if not is_user_admin(chat_id, user_id):
-        bot.answer_callback_query(call.id, _(chat_id, 'admin_only'), show_alert=True)
-        return
-    cmd = data.split(":")[1]
-    # These actions require context (reply). We'll instruct user how to apply.
-    if cmd in ['warn','mute','ban','kick']:
-        bot.answer_callback_query(call.id, f"Use this by replying to a user's message with /{cmd}", show_alert=True)
+    # --- Fallback for Unknown Action (Point 17) ---
     else:
-        bot.answer_callback_query(call.id, _(chat_id, 'unknown_action'), show_alert=True)
-
-# ---------- Message Processing: XP, Triggers, Blacklist ----------
-def add_xp_for_message(chat_id, user_id):
-    """
-    Award XP respecting xp_enabled and cooldown.
-    """
-    menu = menu_get(chat_id)
-    xp_meta = menu.get('xp_settings', {"xp_enabled": True, "xp_cooldown": 10})
-    if not xp_meta.get('xp_enabled', True):
+        logging.warning(f"Unknown callback action: {data}")
+        bot.answer_callback_query(call.id, _(target_id, 'unknown_action'), show_alert=True)
+        # Re-render main menu as a safe fallback
+        send_menu(chat_id, user_id, 'main', message_id=message_id, target_group_id=target_id)
         return
-    cooldown = xp_meta.get('xp_cooldown', 10)
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT points, last_at FROM xp WHERE chat_id=? AND user_id=?", (str(chat_id), str(user_id)))
-    row = c.fetchone()
-    nowt = now_ts()
-    if row:
-        last = row['last_at'] or 0
-        if nowt - last < cooldown:
-            conn.close()
-            return
-        new_points = row['points'] + random.randint(1,3)
-        c.execute("UPDATE xp SET points=?, last_at=? WHERE chat_id=? AND user_id=?", (new_points, nowt, str(chat_id), str(user_id)))
-    else:
-        new_points = random.randint(1,3)
-        c.execute("INSERT INTO xp (chat_id, user_id, points, last_at) VALUES (?, ?, ?, ?)", (str(chat_id), str(user_id), new_points, nowt))
-    conn.commit()
-    conn.close()
-    # Optionally send a small message (we avoid spamming; only send if user reaches multiples of 50)
-    if new_points % 50 == 0:
-        try:
-            bot.send_message(chat_id, _(chat_id, 'xp_gained', points=new_points))
-        except:
-            pass
 
-# Triggers processing
-def process_triggers(message):
+# ---------- Message Handler (Text & All Content) ----------
+@bot.message_handler(func=lambda message: message.chat.type in ['group', 'supergroup'] and message.text)
+def handle_group_messages(message):
     chat_id = message.chat.id
-    text = message.text or ""
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT id, pattern, reply, is_regex FROM triggers WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
+    user_id = message.from_user.id
+    text = message.text
+    
+    # Ignore commands (handled elsewhere)
+    if text.startswith('/') and len(text.split()) > 0 and text.split()[0][1:] in ['start', 'menu', 'warn', 'mute', 'ban', 'kick', 'undo', 'rank', 'leaderboard']:
         return
-    menu = menu_get(chat_id)
-    meta = menu.get('triggers_meta', {})
-    for r in rows:
-        tid = str(r['id'])
-        ent = meta.get(tid, {"enabled": True})
-        if not ent.get('enabled', True):
-            continue
-        try:
-            if r['is_regex']:
-                if re.search(r['pattern'], text, re.IGNORECASE):
-                    bot.reply_to(message, r['reply'])
-                    return
-            else:
-                if r['pattern'].lower() in text.lower():
-                    bot.reply_to(message, r['reply'])
-                    return
-        except Exception:
-            logging.exception("trigger eval failed")
-
-# Blacklist processing
-def process_blacklist(message):
-    chat_id = message.chat.id
-    text = message.text or ""
-    conn = db()
-    c = conn.cursor()
-    c.execute("SELECT word FROM blacklist WHERE chat_id=?", (str(chat_id),))
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        return
-    for r in rows:
-        w = r['word']
-        if w.lower() in text.lower():
-            # simple action: delete message if bot has rights, warn user
+        
+    # 1. Captcha Check (If user is pending)
+    if (chat_id, user_id) in pending_captcha:
+        if verify_captcha(chat_id, user_id, text):
+            # Captcha success
+            unrestrict_user(chat_id, user_id)
+            name = get_user_mention(message.from_user)
+            bot.reply_to(message, _(chat_id, 'captcha_success', name=name))
+            log_action(chat_id, user_id, "captcha_passed")
+        else:
+            # Captcha failure
+            # Delete message and re-ask
             try:
                 bot.delete_message(chat_id, message.message_id)
             except:
                 pass
-            bot.send_message(chat_id, _(chat_id, 'blacklist_violation', count=1))
-            return
-
-# Message handler for text messages to run XP, triggers, blacklist
-@bot.message_handler(func=lambda m: True, content_types=['text', 'photo', 'video', 'sticker', 'document'])
-def handle_all_messages(message):
-    chat_type = message.chat.type
-    # Only process group messages for trigger/blacklist/xp
-    if chat_type in ['group', 'supergroup']:
-        # XP
-        try:
-            add_xp_for_message(message.chat.id, message.from_user.id)
-        except Exception:
-            logging.exception("XP awarding failed")
-        # Triggers
-        try:
-            process_triggers(message)
-        except Exception:
-            logging.exception("Triggers processing failed")
-        # Blacklist
-        try:
-            process_blacklist(message)
-        except Exception:
-            logging.exception("Blacklist processing failed")
-    # Additionally handle replies that are admin commands / note retrieval
-    if message.text and message.text.startswith("/note"):
-        parts = message.text.split(maxsplit=1)
-        key = parts[1].strip() if len(parts) > 1 else None
-        if key:
-            conn = db()
-            c = conn.cursor()
-            c.execute("SELECT content FROM notes WHERE chat_id=? AND key=?", (str(message.chat.id), key))
-            row = c.fetchone()
-            conn.close()
-            if row:
-                bot.reply_to(message, row['content'])
+            
+            q1, q2 = pending_captcha[(chat_id, user_id)]['q1'], pending_captcha[(chat_id, user_id)]['q2']
+            bot.send_message(chat_id, _(chat_id, 'captcha_failed') + " " + _(chat_id, 'captcha_verify', q1=q1, q2=q2))
+            log_action(chat_id, user_id, "captcha_failed")
+        return
+        
+    # 2. Command Permissions Check (if user sends non-standard commands)
+    # The default command handlers will do the check, but this ensures a fallback message
+    # for custom commands (not fully implemented here, but preserved logic)
+    
+    # 3. Flood Check
+    is_flood, count, limit = check_flood(chat_id, user_id)
+    if is_flood:
+        bot.delete_message(chat_id, message.message_id)
+        bot.send_message(chat_id, _(chat_id, 'flood_detected', count=count, limit=limit))
+        mute_user(chat_id, user_id, 300) # Mute for 5 minutes
+        log_action(chat_id, user_id, "auto_mute:flood")
+        return
+        
+    # 4. Blacklist Check (settings must be enabled)
+    settings = get_settings(chat_id)
+    if settings.get('blacklist_enabled'):
+        found, word, _ = check_blacklist(chat_id, text)
+        if found:
+            bot.delete_message(chat_id, message.message_id)
+            count, is_banned = add_blacklist_violation(chat_id, user_id)
+            user_mention = get_user_mention(message.from_user)
+            
+            if is_banned:
+                action_text = _(chat_id, 'user_banned', user=user_mention)
             else:
-                bot.reply_to(message, _(message.chat.id, 'user_not_found'))
+                action_text = _(chat_id, 'blacklist_violation', count=count)
                 
-                # ---------- Admin Commands for Testing / Utility ----------
-@bot.message_handler(commands=['menu'])
-def handle_menu_command(message):
-    chat_id = message.chat.id
-    if message.chat.type == 'private':
-        # private menu: show direct
-        send_menu(chat_id, private=True)
-    else:
-        # group menu: only for admins
-        if not is_user_admin(chat_id, message.from_user.id):
-            bot.reply_to(message, _(chat_id, 'admin_only'))
+            bot.send_message(chat_id, action_text)
             return
-        send_menu(chat_id)
+            
+    # 5. Lock Check (for text-based locks like URLs)
+    violations = check_locks(chat_id, message)
+    if 'urls' in violations:
+        bot.delete_message(chat_id, message.message_id)
+        bot.send_message(chat_id, f"❌ {_(chat_id, 'lock_urls')} {_(chat_id, 'disabled')}")
+        return
 
-@bot.message_handler(commands=['warn'])
-def handle_warn_command(message):
+    # 6. XP Gain (If enabled and not on cooldown)
+    if add_xp(chat_id, user_id, 1):
+        # Notify user of XP gain (optional, but requested in past logic)
+        # bot.send_message(chat_id, _(chat_id, 'xp_gained', points=1), reply_to_message_id=message.message_id)
+        pass
+        
+    # 7. Trigger Check (Basic logic preserved)
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT reply, is_regex FROM triggers WHERE chat_id=?", (str(chat_id),))
+    triggers = c.fetchall()
+    conn.close()
+    
+    for row in triggers:
+        pattern = row['pattern']
+        reply = row['reply']
+        is_regex = row['is_regex']
+        
+        match = False
+        if is_regex:
+            try:
+                if re.search(pattern, text, re.IGNORECASE):
+                    match = True
+            except re.error:
+                # Log bad regex
+                pass 
+        elif text.lower().startswith(pattern.lower()):
+            match = True
+            
+        if match:
+            bot.send_message(chat_id, reply)
+            log_action(chat_id, user_id, f"trigger_match:{pattern}")
+            return
+
+
+# ---------- Message Handler (All Content - for Locks/Forwards) ----------
+@bot.message_handler(content_types=['photo', 'video', 'sticker', 'document', 'forward', 'audio', 'voice', 'video_note', 'new_chat_members', 'left_chat_member', 'location', 'contact', 'animation', 'poll', 'game', 'dice'])
+def handle_all_content(message):
     chat_id = message.chat.id
-    if message.chat.type not in ['group', 'supergroup']:
+    user_id = message.from_user.id
+    
+    # Ignore new/left members events for lock check
+    if message.content_type in ['new_chat_members', 'left_chat_member']:
         return
-    if not is_user_admin(chat_id, message.from_user.id):
-        bot.reply_to(message, _(chat_id, 'admin_only'))
-        return
-    if not message.reply_to_message:
-        bot.reply_to(message, _(chat_id, 'usage', usage="/warn <reply a user>"))
-        return
-    user = message.reply_to_message.from_user
-    # For demo, we just reply with warn message
-    bot.reply_to(message, _(chat_id, 'user_warned', user=user.first_name, count=1))
-
-@bot.message_handler(commands=['mute'])
-def handle_mute_command(message):
-    chat_id = message.chat.id
-    if not is_user_admin(chat_id, message.from_user.id):
-        bot.reply_to(message, _(chat_id, 'admin_only'))
-        return
-    if not message.reply_to_message:
-        bot.reply_to(message, _(chat_id, 'usage', usage="/mute <reply>"))
-        return
-    user = message.reply_to_message.from_user
-    duration = "10m"
-    try:
-        bot.restrict_chat_member(chat_id, user.id, permissions=telebot.types.ChatPermissions(can_send_messages=False))
-        bot.reply_to(message, _(chat_id, 'user_muted', user=user.first_name, duration=duration))
-    except Exception:
-        bot.reply_to(message, _(chat_id, 'start_group_not_admin'))
-
-@bot.message_handler(commands=['ban'])
-def handle_ban_command(message):
-    chat_id = message.chat.id
-    if not is_user_admin(chat_id, message.from_user.id):
-        bot.reply_to(message, _(chat_id, 'admin_only'))
-        return
-    if not message.reply_to_message:
-        bot.reply_to(message, _(chat_id, 'usage', usage="/ban <reply>"))
-        return
-    user = message.reply_to_message.from_user
-    try:
-        bot.ban_chat_member(chat_id, user.id)
-        bot.reply_to(message, _(chat_id, 'user_banned', user=user.first_name))
-    except Exception:
-        bot.reply_to(message, _(chat_id, 'start_group_not_admin'))
-
-@bot.message_handler(commands=['kick'])
-def handle_kick_command(message):
-    chat_id = message.chat.id
-    if not is_user_admin(chat_id, message.from_user.id):
-        bot.reply_to(message, _(chat_id, 'admin_only'))
-        return
-    if not message.reply_to_message:
-        bot.reply_to(message, _(chat_id, 'usage', usage="/kick <reply>"))
-        return
-    user = message.reply_to_message.from_user
-    try:
-        bot.unban_chat_member(chat_id, user.id)  # works as kick
-        bot.reply_to(message, _(chat_id, 'user_kicked', user=user.first_name))
-    except Exception:
-        bot.reply_to(message, _(chat_id, 'start_group_not_admin'))
-
-
-# ---------- Error Logging ----------
-@bot.message_handler(func=lambda m: True, content_types=['new_chat_members'])
-def handle_new_member(message):
-    chat_id = message.chat.id
-    for member in message.new_chat_members:
+        
+    # 1. Lock Check (for media/forwards)
+    violations = check_locks(chat_id, message)
+    
+    if violations:
+        # Delete message and notify (Point 14)
         try:
-            bot.send_message(chat_id, _(chat_id, 'welcome_message', name=member.first_name))
-        except Exception:
+            bot.delete_message(chat_id, message.message_id)
+            
+            # Use the first violation type for the notification
+            violation_key = f"lock_{violations[0]}" 
+            
+            # Send a localized lock message
+            bot.send_message(
+                chat_id, 
+                f"❌ {_(chat_id, violation_key)} {_(chat_id, 'disabled')}",
+                parse_mode="HTML"
+            )
+            log_action(chat_id, user_id, f"lock_violation:{violations[0]}")
+            
+        except telebot.apihelper.ApiTelegramException as e:
+            # Bot might not have permission to delete
+            if 'admin_rights_insufficient' in str(e):
+                 # Notify the creator once (Point 14)
+                 notify_missing_permission(chat_id, "delete messages")
+                 # Fallback: Just log and don't delete
+                 logging.warning(f"Failed to delete locked content in {chat_id}: {e}")
             pass
-
-@bot.message_handler(func=lambda m: True, content_types=['left_chat_member'])
-def handle_left_member(message):
-    chat_id = message.chat.id
-    try:
-        name = message.left_chat_member.first_name
-        bot.send_message(chat_id, _(chat_id, 'goodbye_message', name=name))
-    except Exception:
+        return
+        
+    # 2. XP Gain for all content types
+    if add_xp(chat_id, user_id, 1):
+        # XP gained
         pass
 
-@bot.message_handler(commands=['lang'])
-def handle_lang_command(message):
-    chat_id = message.chat.id
-    cur = get_settings(chat_id).get('lang', 'hi')
-    new = 'en' if cur == 'hi' else 'hi'
-    set_setting(chat_id, 'lang', new)
-    bot.reply_to(message, _(chat_id, 'lang_changed'))
-    send_menu(chat_id)
 
-# ---------- Safe Polling with Retry ----------
-def safe_polling():
+# ---------- Group Member Status Handlers (Welcome/Leave) ----------
+@bot.message_handler(content_types=['new_chat_members'])
+def handle_new_members(message):
+    chat_id = message.chat.id
+    settings = get_settings(chat_id)
+    
+    for user in message.new_chat_members:
+        if user.is_bot:
+            continue
+            
+        # 1. Welcome Message
+        if settings.get('welcome_enabled', 1):
+            name = get_user_mention(user)
+            welcome_text = _(chat_id, 'welcome_message', name=name)
+            
+            # 2. CAPTCHA Check (simple check for now, can be extended)
+            if user.id not in rejoin_tracker[chat_id]: # Simple check to avoid captcha on re-join
+                # Restrict user
+                restrict_new_user(chat_id, user.id)
+                
+                # Create captcha
+                q1, q2 = create_captcha(chat_id, user.id)
+                captcha_text = _(chat_id, 'captcha_verify', q1=q1, q2=q2)
+                
+                # Send combined message
+                bot.send_message(
+                    chat_id, 
+                    f"{welcome_text}\n\n{captcha_text}", 
+                    parse_mode="HTML"
+                )
+                log_action(chat_id, user.id, "welcome_captcha")
+            else:
+                # No captcha for assumed rejoiner
+                bot.send_message(chat_id, welcome_text, parse_mode="HTML")
+                unrestrict_user(chat_id, user.id) # Ensure they are unrestricted
+                log_action(chat_id, user.id, "welcome_rejoin")
+            
+        # Add user to rejoin tracker
+        rejoin_tracker[chat_id].add(user.id)
+            
+@bot.message_handler(content_types=['left_chat_member'])
+def handle_left_members(message):
+    chat_id = message.chat.id
+    user = message.left_chat_member
+    settings = get_settings(chat_id)
+    
+    if user.is_bot:
+        return
+        
+    # 1. Goodbye Message
+    if settings.get('leave_enabled', 1):
+        name = get_user_mention(user)
+        goodbye_text = _(chat_id, 'goodbye_message', name=name)
+        bot.send_message(chat_id, goodbye_text, parse_mode="HTML")
+        log_action(chat_id, user.id, "leave")
+        
+    # Remove from pending captcha
+    if (chat_id, user.id) in pending_captcha:
+        del pending_captcha[(chat_id, user.id)]
+        
+# ---------- Moderation Commands (Point 9, 14) ----------
+# All mod commands require a reply to a message and admin status
+@bot.message_handler(commands=['warn', 'mute', 'ban', 'kick', 'undo'])
+def handle_moderation_commands(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    command = message.text.split()[0].replace('/', '').split('@')[0]
+    
+    if message.chat.type not in ['group', 'supergroup']:
+        bot.reply_to(message, "❌ यह कमांड सिर्फ़ ग्रुप्स में काम करता है।")
+        return
+        
+    # 1. Admin Permission Check (Fixed Admin only - Point 9)
+    if not is_admin_member(chat_id, user_id):
+        bot.reply_to(message, _(chat_id, 'admin_only'))
+        return
+        
+    # 2. Check for Reply
+    if not message.reply_to_message:
+        bot.reply_to(message, _(chat_id, 'usage', usage=f"/{command} का इस्तेमाल करने के लिए किसी मैसेज को reply करें।"))
+        return
+        
+    target_user = message.reply_to_message.from_user
+    target_id = target_user.id
+    
+    # Cannot moderate oneself
+    if target_id == user_id:
+        bot.reply_to(message, "❌ आप खुद को moderate नहीं कर सकते।")
+        return
+        
+    # Cannot moderate bot or other admins (except Creator)
+    if target_user.is_bot or is_admin_member(chat_id, target_id):
+        if not is_creator_member(chat_id, user_id): # Only creator can touch other admins
+            bot.reply_to(message, "❌ आप किसी admin या bot को moderate नहीं कर सकते।")
+            return
+    
+    user_mention = get_user_mention(target_user)
+    
+    # 3. Check Bot Permissions (Point 14)
+    permissions = check_bot_permissions(chat_id)
+
+    # --- Warn ---
+    if command == 'warn':
+        count, action = warn_user(chat_id, target_id)
+        if action == 'banned':
+            # Send banned message and notify bot permission error if any
+            if not permissions.get('can_restrict'):
+                 notify_missing_permission(chat_id, "restrict/ban members")
+                 bot.reply_to(message, _(chat_id, 'user_warned', user=user_mention, count=count)) # Warn message only
+                 bot.send_message(chat_id, f"🚫 {user_mention} 3 warns के कारण ban हो गया। (Bot permission missing, may not be permanent)")
+            else:
+                bot.reply_to(message, _(chat_id, 'user_banned', user=user_mention))
+        else:
+            bot.reply_to(message, _(chat_id, 'user_warned', user=user_mention, count=count))
+            
+    # --- Mute ---
+    elif command == 'mute':
+        if not permissions.get('can_restrict'):
+             bot.reply_to(message, _(chat_id, 'admin_only') + " (Bot needs 'restrict members' permission)")
+             notify_missing_permission(chat_id, "restrict members")
+             return
+             
+        # Extract duration: /mute 1h, /mute 30m etc. (default 1h)
+        duration_sec = 3600
+        duration_str = '1h'
+        try:
+            parts = message.text.split()
+            if len(parts) > 1:
+                match = re.match(r"(\d+)([mhd])", parts[1].lower())
+                if match:
+                    value, unit = match.groups()
+                    value = int(value)
+                    if unit == 'm':
+                        duration_sec = value * 60
+                        duration_str = f"{value}m"
+                    elif unit == 'h':
+                        duration_sec = value * 3600
+                        duration_str = f"{value}h"
+                    elif unit == 'd':
+                        duration_sec = value * 86400
+                        duration_str = f"{value}d"
+        except:
+            pass # Use default
+            
+        if mute_user(chat_id, target_id, duration_sec):
+            bot.reply_to(message, _(chat_id, 'user_muted', user=user_mention, duration=duration_str))
+        else:
+            bot.reply_to(message, _(chat_id, 'error_occurred'))
+            
+    # --- Ban ---
+    elif command == 'ban':
+        if not permissions.get('can_restrict'):
+             bot.reply_to(message, _(chat_id, 'admin_only') + " (Bot needs 'restrict members' permission)")
+             notify_missing_permission(chat_id, "restrict/ban members")
+             return
+             
+        if ban_user(chat_id, target_id):
+            bot.reply_to(message, _(chat_id, 'user_banned', user=user_mention))
+        else:
+            bot.reply_to(message, _(chat_id, 'error_occurred'))
+            
+    # --- Kick ---
+    elif command == 'kick':
+        if not permissions.get('can_restrict'):
+             bot.reply_to(message, _(chat_id, 'admin_only') + " (Bot needs 'restrict members' permission)")
+             notify_missing_permission(chat_id, "restrict/ban members")
+             return
+             
+        if kick_user(chat_id, target_id):
+            bot.reply_to(message, _(chat_id, 'user_kicked', user=user_mention))
+        else:
+            bot.reply_to(message, _(chat_id, 'error_occurred'))
+            
+    # --- Undo ---
+    elif command == 'undo':
+        success, ptype = undo_punishment(chat_id, target_id)
+        if success:
+            bot.reply_to(message, f"✅ {user_mention} से आख़िरी {ptype} कार्रवाई हटा दी गई।")
+        else:
+            bot.reply_to(message, f"❌ {ptype}")
+
+
+# ---------- Fallback Handler (For all other messages in private chat, including state handling) ----------
+@bot.message_handler(func=lambda message: message.chat.type == 'private')
+def handle_private_messages(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    # Check if user is in a multi-step state
+    state_key = (chat_id, user_id)
+    if state_key in STATE:
+        state_data = STATE[state_key]
+        action = state_data['action']
+        target_id = state_data['target_id']
+        text = message.text
+        
+        # Note/Trigger/Poll/Blacklist ADD flow (Point 6, 5, 8, 7)
+        if action.endswith('_wait_for_key'):
+            module = action.split('_')[0] # 'note', 'trigger', 'blacklist', 'poll'
+            
+            # Note/Trigger/Blacklist: Expecting key/word
+            if module in ['note', 'trigger', 'blacklist']:
+                
+                parts = text.split(maxsplit=1)
+                
+                if len(parts) < 1 and module != 'blacklist':
+                    bot.send_message(chat_id, _(target_id, 'invalid_input'))
+                    return
+                
+                key = parts[0]
+                content = parts[1] if len(parts) > 1 else ""
+                
+                if module == 'blacklist':
+                    word = text.lower().strip()
+                    if not word:
+                         bot.send_message(chat_id, _(target_id, 'invalid_input'))
+                         return
+                    
+                    # Store blacklist word directly (simple implementation)
+                    conn = db()
+                    c = conn.cursor()
+                    c.execute("INSERT INTO blacklist (chat_id, word) VALUES (?,?)", (target_id, word))
+                    conn.commit()
+                    conn.close()
+                    
+                    bot.send_message(chat_id, _(target_id, 'note_added', key=word)) # Reusing note_added for confirmation
+                    log_action(target_id, user_id, f"blacklist_add:{word}")
+                    
+                else: # note or trigger
+                    # Save key and ask for content
+                    STATE[state_key] = {'action': f'{module}_wait_for_content', 'target_id': target_id, 'key': key, 'content': content}
+                    
+                    if module == 'note':
+                        # Note: content is already given in same line
+                        conn = db()
+                        c = conn.cursor()
+                        c.execute("INSERT INTO notes (chat_id, key, content, created_at) VALUES (?,?,?,?)", (target_id, key, content, now_ts()))
+                        conn.commit()
+                        conn.close()
+                        
+                        bot.send_message(chat_id, _(target_id, 'note_added', key=key))
+                        log_action(target_id, user_id, f"note_add:{key}")
+                        
+                    elif module == 'trigger':
+                         # Trigger: content is reply
+                        conn = db()
+                        c = conn.cursor()
+                        c.execute("INSERT INTO triggers (chat_id, pattern, reply, is_regex) VALUES (?,?,?,?)", (target_id, key, content, 0)) # Default to non-regex
+                        conn.commit()
+                        conn.close()
+                        
+                        bot.send_message(chat_id, _(target_id, 'trigger_added'))
+                        log_action(target_id, user_id, f"trigger_add:{key}")
+                        
+                # Clear state after completion
+                del STATE[state_key] 
+                
+            elif module == 'poll':
+                # Poll creation: Question + options, one per line
+                lines = [line.strip() for line in text.split('\n') if line.strip()]
+                question = lines[0]
+                options = lines[1:]
+                
+                if not question or len(options) < 2 or len(options) > 10:
+                    bot.send_message(chat_id, "❌ Poll के लिए कम से कम 2 और अधिकतम 10 विकल्प चाहिए।")
+                    return
+                    
+                # Store poll details (Point 7 - initial creation)
+                conn = db()
+                c = conn.cursor()
+                c.execute("INSERT INTO polls (chat_id, question, options_json, multiple, open, created_at) VALUES (?,?,?,?,?,?)", 
+                          (target_id, question, jdump(options), 0, 1, now_ts()))
+                poll_id = c.lastrowid
+                conn.commit()
+                conn.close()
+                
+                # Send the poll to the group (Telegram's native poll functionality is better, but this uses custom DB for consistency)
+                # Since the prompt asks for polls menu/list, we assume it's custom.
+                bot.send_message(
+                    target_id, 
+                    f"📊 <b>New Poll:</b> {safe_html(question)}",
+                    reply_markup=_build_custom_poll_keyboard(poll_id, target_id, options)
+                )
+                
+                bot.send_message(chat_id, _(target_id, 'poll_created'))
+                log_action(target_id, user_id, f"poll_create:{question}")
+                del STATE[state_key]
+                
+        
+        # Fallback for unknown state (should not happen)
+        else:
+            bot.send_message(chat_id, f"{_(chat_id, 'invalid_input')}\n{_(chat_id, 'cancel')} कमांड चलाकर इसे रद्द करें।")
+            
+    # Default message if not in state
+    else:
+        bot.send_message(chat_id, _(chat_id, 'start_private'))
+
+
+# --- Placeholder for custom poll keyboard builder (Point 7) ---
+def _build_custom_poll_keyboard(poll_id, chat_id, options):
+    """Builds an inline keyboard for a custom poll."""
+    keyboard = types.InlineKeyboardMarkup()
+    chat_id_str = str(chat_id)
+    
+    # For simplicity, we just add the vote options
+    for i, option in enumerate(options):
+        # Callback format: poll:vote:poll_id:option_index
+        keyboard.add(types.InlineKeyboardButton(f"🗳️ {safe_html(option)}", callback_data=f"poll:vote:{poll_id}:{i}"))
+
+    # Add refresh/close buttons
+    keyboard.add(
+        types.InlineKeyboardButton(_(chat_id_str, 'active_polls'), callback_data=f"poll:{chat_id_str}:active"),
+        types.InlineKeyboardButton("❌ Close Poll", callback_data=f"poll:close:{poll_id}")
+    )
+    return keyboard
+
+# ... continue in next part ...
+# ----------------------------------------------------------------------
+# -------------------- Telegram Message Handlers (Continued from Part 2) ----------------
+# ----------------------------------------------------------------------
+
+# --- Placeholder for custom poll keyboard builder (Point 7) ---
+def _build_custom_poll_keyboard(poll_id, target_id, options_data):
+    """Builds an inline keyboard for a custom poll with updated counts."""
+    keyboard = types.InlineKeyboardMarkup()
+    chat_id_str = str(target_id)
+    
+    # options_data is a list of {"text": str, "voters": list}
+    total_votes = sum(len(opt['voters']) for opt in options_data)
+    
+    for i, option in enumerate(options_data):
+        count = len(option['voters'])
+        percentage = (count / total_votes * 100) if total_votes > 0 else 0
+        
+        # Display: [Option Text] [Count] [Percentage]
+        button_text = f"🗳️ {safe_html(option['text'])} ({count}) [{percentage:.0f}%]"
+        
+        # Callback format: poll:vote:poll_id:option_index
+        keyboard.add(types.InlineKeyboardButton(button_text, callback_data=f"poll:vote:{poll_id}:{i}"))
+
+    # Add refresh/close buttons
+    keyboard.add(
+        types.InlineKeyboardButton("🔄 Refresh / My Vote", callback_data=f"poll:vote:{poll_id}:-1"),
+        types.InlineKeyboardButton("❌ Close Poll", callback_data=f"poll:close:{poll_id}")
+    )
+    return keyboard
+
+# --- Helper function to get/update poll data ---
+def get_poll_data(poll_id):
+    conn = db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM polls WHERE id=?", (poll_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        data = dict(row)
+        # Ensure options_json is correctly structured for voting: [{"text": str, "voters": list}]
+        try:
+            options_data = jload(data['options_json'])
+            if options_data and isinstance(options_data[0], str):
+                # Initialize for first time voting
+                data['options_json'] = jdump([{'text': opt, 'voters': []} for opt in options_data])
+            elif options_data and 'voters' not in options_data[0]:
+                # Update old structure
+                data['options_json'] = jdump([{'text': opt['text'], 'voters': []} for opt in options_data])
+            elif not options_data:
+                 return None
+            return data
+        except Exception as e:
+            logging.error(f"Error loading poll options_json: {e}")
+            return None
+    return None
+
+def update_poll_options(poll_id, options_data):
+    conn = db()
+    c = conn.cursor()
+    c.execute("UPDATE polls SET options_json=? WHERE id=?", (jdump(options_data), poll_id))
+    conn.commit()
+    conn.close()
+    
+# --- Extend callback_inline for Poll Voting/Closing (Point 7) ---
+# NOTE: To fit within the continuous code structure, this function assumes the main 
+# callback_inline handler in Part 2 is modified to delegate poll actions here.
+@bot.callback_query_handler(func=lambda call: call.data.startswith('poll:vote:') or call.data.startswith('poll:close:'))
+def handle_poll_callbacks(call):
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    message_id = call.message.message_id
+    data = call.data
+    parts = data.split(':')
+    action = parts[1] # 'vote' or 'close'
+    poll_id = int(parts[2])
+    
+    # 1. Close Poll
+    if action == 'close':
+        if not is_admin_member(chat_id, user_id):
+            bot.answer_callback_query(call.id, _(chat_id, 'admin_only'), show_alert=True)
+            return
+
+        conn = db()
+        c = conn.cursor()
+        c.execute("UPDATE polls SET open=0 WHERE id=?", (poll_id,))
+        conn.commit()
+        conn.close()
+        
+        # Re-fetch poll to show final results
+        poll_row = get_poll_data(poll_id)
+        if poll_row:
+            final_text = f"📊 <b>POLL CLOSED:</b> {safe_html(poll_row['question'])}\n\n"
+            options_data = jload(poll_row['options_json'])
+            total_votes = sum(len(opt['voters']) for opt in options_data)
+            
+            for opt in options_data:
+                count = len(opt['voters'])
+                percentage = (count / total_votes * 100) if total_votes > 0 else 0
+                final_text += f"🗳️ {safe_html(opt['text'])}: {count} votes ({percentage:.0f}%)\n"
+            
+            # Remove inline keyboard
+            bot.edit_message_text(final_text, chat_id, message_id, reply_markup=None, parse_mode="HTML")
+            bot.answer_callback_query(call.id, "✅ Poll closed.")
+        else:
+            bot.answer_callback_query(call.id, "⚠️ Poll not found.")
+        return
+
+    # 2. Vote
+    elif action == 'vote':
+        vote_index = int(parts[3])
+        poll_row = get_poll_data(poll_id)
+        
+        if not poll_row or not poll_row['open']:
+            bot.answer_callback_query(call.id, "❌ This poll is closed.", show_alert=True)
+            return
+            
+        options_data = jload(poll_row['options_json'])
+        
+        already_voted_index = -1
+        for i, opt in enumerate(options_data):
+            if str(user_id) in opt['voters']:
+                already_voted_index = i
+                break
+                
+        # Handle Refresh / My Vote click (vote_index == -1)
+        if vote_index == -1:
+            if already_voted_index != -1:
+                opt_text = options_data[already_voted_index]['text']
+                bot.answer_callback_query(call.id, f"✅ You have voted for: {safe_html(opt_text)}", show_alert=True)
+            else:
+                bot.answer_callback_query(call.id, "🗳️ You have not voted yet.")
+                new_keyboard = _build_custom_poll_keyboard(poll_id, chat_id, options_data)
+                bot.edit_message_reply_markup(chat_id, message_id, reply_markup=new_keyboard)
+                
+        
+        # Process the actual vote
+        elif 0 <= vote_index < len(options_data):
+            if already_voted_index == vote_index:
+                bot.answer_callback_query(call.id, "✅ Your vote is already counted.")
+                return
+            else:
+                # Remove vote from old option (assuming single choice)
+                if already_voted_index != -1:
+                     options_data[already_voted_index]['voters'].remove(str(user_id))
+                     
+                # Add vote to new option
+                options_data[vote_index]['voters'].append(str(user_id))
+                
+                # Update DB and refresh keyboard
+                update_poll_options(poll_id, options_data)
+                
+                # Re-render the message with new counts
+                new_keyboard = _build_custom_poll_keyboard(poll_id, chat_id, options_data)
+                bot.edit_message_reply_markup(chat_id, message_id, reply_markup=new_keyboard)
+                
+                bot.answer_callback_query(call.id, "✅ Vote counted.")
+        else:
+            bot.answer_callback_query(call.id, _(chat_id, 'error_occurred'))
+
+# --- Helper function to render a list and allow deletion (for Note/Trigger/Blacklist) ---
+def _build_list_menu(chat_id, user_id, module, target_id):
+    chat_id_str = str(chat_id)
+    keyboard = types.InlineKeyboardMarkup()
+    desc_lines = [f"📋 <b>{_(chat_id_str, module.capitalize())} List</b> (Click 🗑️ to Delete)"]
+    
+    conn = db()
+    c = conn.cursor()
+    
+    if module == 'note':
+        c.execute("SELECT id, key, content FROM notes WHERE chat_id=?", (target_id,))
+    elif module == 'trigger':
+        c.execute("SELECT id, pattern as key, reply FROM triggers WHERE chat_id=?", (target_id,))
+    elif module == 'blacklist':
+        c.execute("SELECT id, word as key, word as content FROM blacklist WHERE chat_id=?", (target_id,))
+    else:
+        conn.close()
+        return "\n".join(desc_lines), keyboard
+
+    rows = c.fetchall()
+    conn.close()
+    
+    if not rows:
+        desc_lines.append(f"<i>No active {module}s found.</i>")
+    
+    for row in rows:
+        key = row['key']
+        item_id = row['id']
+        
+        # Display text: [Key] (Optional reply snippet)
+        content_snippet = row.get('content', row.get('reply', ''))
+        display_text = safe_html(key)
+        if content_snippet:
+             display_text += f" -> {safe_html(content_snippet[:20])}..."
+             
+        # Button: [Key/Pattern] [Delete]
+        keyboard.add(
+            types.InlineKeyboardButton(display_text, callback_data="ignore_label"),
+            # Callback format: module:target_id:del:item_id
+            types.InlineKeyboardButton("🗑️", callback_data=f"{module}:{target_id}:del:{item_id}")
+        )
+        
+    # Back button to the main menu of the module
+    keyboard.add(types.InlineKeyboardButton(_(chat_id_str, 'back'), callback_data=f"menu:{target_id}:{module}"))
+    
+    return "\n".join(desc_lines), keyboard
+
+# --- Extend callback_inline for listing and deletion (Point 3, 5, 6, 8) ---
+# NOTE: This dedicated handler assumes the main callback_inline function (in Part 2) 
+# routes all 'list' and 'del' actions here.
+@bot.callback_query_handler(func=lambda call: call.data.endswith(':list') or call.data.endswith(':active') or 'del' in call.data.split(':'))
+def handle_list_delete_callbacks(call):
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    message_id = call.message.message_id
+    data = call.data
+    parts = data.split(':')
+    
+    module = parts[0]
+    action = parts[2] if len(parts) > 2 else parts[1] # Check for delete action
+    target_id = parts[1]
+    
+    # 1. Permission Check
+    if not str(chat_id).startswith('-') and target_id.startswith('-'):
+        is_allowed = is_creator_member(target_id, user_id)
+    else:
+        is_allowed = is_admin_member(chat_id, user_id)
+        
+    if not is_allowed:
+        bot.answer_callback_query(call.id, _(target_id, 'admin_only'), show_alert=True)
+        return
+    
+    # 2. Listing Menu (list/active)
+    if action == 'list' or action == 'active':
+        
+        desc, kb = _build_list_menu(chat_id, user_id, module, target_id)
+        
+        try:
+             bot.edit_message_text(
+                desc,
+                chat_id,
+                message_id,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+             bot.answer_callback_query(call.id)
+        except Exception as e:
+            if 'message is not modified' in str(e):
+                bot.answer_callback_query(call.id, f"✅ {module.capitalize()} list up-to-date.")
+            else:
+                 bot.answer_callback_query(call.id, _(target_id, 'error_occurred'), show_alert=True)
+        return
+        
+    # 3. Deletion (Format: module:target_id:del:item_id)
+    elif action == 'del':
+        item_id = int(parts[3])
+        
+        conn = db()
+        c = conn.cursor()
+        deleted_key = ""
+        
+        if module == 'note':
+            c.execute("SELECT key FROM notes WHERE id=? AND chat_id=?", (item_id, target_id))
+            row = c.fetchone()
+            if row:
+                deleted_key = row['key']
+                c.execute("DELETE FROM notes WHERE id=? AND chat_id=?", (item_id, target_id))
+                
+        elif module == 'trigger':
+            c.execute("SELECT pattern FROM triggers WHERE id=? AND chat_id=?", (item_id, target_id))
+            row = c.fetchone()
+            if row:
+                deleted_key = row['pattern']
+                c.execute("DELETE FROM triggers WHERE id=? AND chat_id=?", (item_id, target_id))
+                
+        elif module == 'blacklist':
+            c.execute("SELECT word FROM blacklist WHERE id=? AND chat_id=?", (item_id, target_id))
+            row = c.fetchone()
+            if row:
+                deleted_key = row['word']
+                c.execute("DELETE FROM blacklist WHERE id=? AND chat_id=?", (item_id, target_id))
+
+        conn.commit()
+        conn.close()
+        
+        if deleted_key:
+            log_action(target_id, user_id, f"{module}_delete:{deleted_key}")
+            # Reusing 'note_deleted' for generic deletion confirmation
+            bot.answer_callback_query(call.id, _(target_id, 'note_deleted', key=deleted_key)) 
+            
+            # Re-render the list menu instantly
+            desc, kb = _build_list_menu(chat_id, user_id, module, target_id)
+            bot.edit_message_text(desc, chat_id, message_id, reply_markup=kb, parse_mode="HTML")
+        else:
+            bot.answer_callback_query(call.id, "⚠️ Item not found or already deleted.", show_alert=True)
+        return
+
+
+# ----------------------------------------------------------------------
+# -------------------- BOT STARTUP & MAIN LOOP (Point 18, 20) ----------
+# ----------------------------------------------------------------------
+
+# --- Auto Cleanup Thread ---
+def auto_cleanup_thread():
+    """Periodically cleans up expired captcha attempts."""
     while True:
         try:
-            logging.info("🤖 Bot polling started.")
-            bot.infinity_polling(timeout=30, long_polling_timeout=20)
+            now = now_ts()
+            
+            # 1. Cleanup expired captcha (5 mins expiry)
+            with CAPTCHA_LOCK:
+                # Remove restriction for users who timed out on captcha
+                expired_keys = [key for key, data in pending_captcha.items() if (now - data['created_at']) > 300] 
+                for chat_id, user_id in expired_keys:
+                    unrestrict_user(chat_id, user_id)
+                    logging.info(f"Captcha expired/timed out for {user_id} in {chat_id}")
+                    del pending_captcha[(chat_id, user_id)]
+            
         except Exception as e:
-            logging.exception("Polling error, retrying in 10s...")
-            time.sleep(10)
+            logging.error(f"Auto-cleanup error: {e}")
+            
+        # Wait for 30 seconds before next check
+        time.sleep(30)
 
-# ---------- Startup ----------
-if __name__ == "__main__":
+
+def main():
+    "Main function to start the bot"
+    global BOT_USERNAME
+    logging.info("🤖 Bot starting...")
+    logging.info(f"📊 Database: {DB_PATH}")
+    
+    # 1. Initialize Database
+    init_db() 
+    
+    # 2. Fetch Bot Info
     try:
-        me = bot.get_me()
-        BOT_USERNAME = me.username
-        logging.info(f"✅ Bot logged in as {me.first_name} (@{BOT_USERNAME})")
+        bot_info = bot.get_me()
+        BOT_USERNAME = bot_info.username
+        logging.info(f"✅ Bot username: @{BOT_USERNAME}")
+        
     except Exception as e:
-        logging.exception("Failed to fetch bot info.")
+        logging.error(f"❌ Failed to fetch bot info: {e}")
         sys.exit(1)
-    safe_polling()
+        
+    # 3. Start Auto Cleanup Thread 
+    thread = Thread(target=auto_cleanup_thread)
+    thread.daemon = True
+    thread.start()
+    logging.info("✅ Auto cleanup thread started.")
+        
+    logging.info("✅ All systems ready")
+    logging.info("🚀 Starting infinite polling...")
+    
+    # 4. Start Polling
+    try:
+        bot.infinity_polling(
+            timeout=60,
+            long_polling_timeout=60,
+            logger_level=logging.INFO,
+            allowed_updates=['message', 'callback_query', 'chat_member']
+        )
+    except KeyboardInterrupt:
+        logging.info("🛑 Bot stopped by user (Ctrl+C).")
+    except Exception as e:
+        logging.error(f"❌ Polling stopped due to error: {e}")
+
+
+if __name__ == '__main__':
+    main()
+
+# ----------------------------------------------------------------------
+# -------------------- END OF bot.py CODE ------------------------------
+# ----------------------------------------------------------------------
+
