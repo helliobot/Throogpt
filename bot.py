@@ -363,12 +363,11 @@ def notify_missing_permission(chat_id, permission):
         if creator:
             bot.send_message(
                 creator[0].user.id,
-                f"⚠️ Bot को '{permission}' permission नहीं है।
-"
+                f"⚠️ Bot को '{permission}' permission नहीं है।\n"
                 f"Group: {chat_id}"
             )
-    except:
-        pass
+    except Exception as e:
+        print(f"Error notifying missing permission: {e}")
 
 def has_command_permission(chat_id, user_id, command):
     """Check if user has permission to use command based on roles_json"""
