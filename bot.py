@@ -399,6 +399,47 @@ def is_admin_member(chat_id, user_id):
         return member.status in ['creator', 'administrator']
     except:
         return False
+        
+# -------------------- नया हेल्पर फ़ंक्शन (Add this block) --------------------
+def get_user_managed_groups(user_id):
+    """
+    यूज़र द्वारा प्रबंधित ग्रुप (जहाँ यूज़र क्रिएटर है और बॉट एक्टिव है) की सूची लाता है।
+    यह फ़ंक्शन मानता है कि 'settings' टेबल में बॉट के एक्टिव सभी ग्रुप_आईडी मौजूद हैं।
+    """
+    conn = db()
+    c = conn.cursor()
+    # उन सभी chat_id को चुनें जो ग्रुप (नेगेटिव ID) हैं
+    c.execute("SELECT DISTINCT chat_id FROM settings WHERE chat_id LIKE '-%'")
+    all_group_ids = [row['chat_id'] for row in c.fetchall()]
+    conn.close()
+    
+    managed_groups = []
+    for chat_id in all_group_ids:
+        # क्रिएटर की जाँच करें (is_creator_member फ़ंक्शन का उपयोग करके)
+        if is_creator_member(chat_id, user_id):
+            # ग्रुप का टाइटल प्राप्त करने का प्रयास करें
+            try:
+                # यदि बॉट ग्रुप से हटा दिया गया है, तो यह API कॉल विफल हो जाएगा
+                group_info = bot.get_chat(chat_id) 
+                
+                # सुनिश्चित करें कि बॉट अभी भी ग्रुप में है (get_chat() सफल होने का मतलब है कि ग्रुप मौजूद है)
+                
+                managed_groups.append({
+                    'id': chat_id, 
+                    'title': group_info.title
+                })
+            except telebot.apihelper.ApiTelegramException as e:
+                # यदि चैट नहीं मिली (बॉट को हटा दिया गया या पहुँच नहीं है), तो इसे नज़रअंदाज़ करें
+                if 'chat not found' in str(e) or 'not a member of the chat' in str(e):
+                    logging.warning(f"Bot removed or chat not found for ID: {chat_id}")
+                else:
+                    logging.error(f"Error fetching chat info for {chat_id}: {e}")
+                pass
+            except Exception as e:
+                logging.error(f"Unexpected error fetching chat info for {chat_id}: {e}")
+                pass
+    return managed_groups
+    
 
 def is_creator_member(chat_id, user_id):
     "Check if user is creator of the chat"
@@ -1252,11 +1293,9 @@ def send_menu(chat_id, user_id, menu_type, message_id=None, is_private=False, gr
             logging.error(f"Error sending/editing menu: {e}")
 
 
-# ----------------------------------------------------------------------
-# -------------------- Telegram Message Handlers (Continued) -------------
-# ----------------------------------------------------------------------
+# -------------------- Telegram Message Handler (इस ब्लॉक से मौजूदा handle_start_menu फ़ंक्शन को बदलें) --------------------
 
-# ---------- Commands: /start and /menu (Point 12, 13) ----------
+# ---------- Commands: /start and /menu (Modified for private chat UX) ----------
 @bot.message_handler(commands=['start', 'menu'])
 def handle_start_menu(message):
     chat_id = message.chat.id
@@ -1264,31 +1303,76 @@ def handle_start_menu(message):
     
     # 1. Private Chat Flow
     if message.chat.type == 'private':
-        # If the command includes a target group ID (e.g., /start -123456789)
-        # This happens when the user clicks 'Open in private' button from a group.
+        
+        # A. Deep-linking Check (e.g., /start -123456789)
+        # यह तब होता है जब यूज़र ग्रुप से 'Open in private' बटन क्लिक करता है।
         try:
-            target_group_id = message.text.split()[1]
-            if target_group_id.startswith('-100'):
-                # Try to get group info for title
-                try:
-                    group_info = bot.get_chat(target_group_id)
-                    group_title = group_info.title
-                except:
-                    group_title = target_group_id
+            # message.text.split() यह सुनिश्चित करता है कि यह /start के बाद के पैरामीटर को उठाता है।
+            parts = message.text.split()
+            if len(parts) > 1:
+                target_group_id = parts[1]
+                # ID नेगेटिव होनी चाहिए (ग्रुप/सुपरग्रुप)
+                if target_group_id.startswith('-100') or target_group_id.startswith('-'):
                     
-                # User is managing a specific group's settings privately
-                send_menu(chat_id, user_id, 'main', is_private=True, group_title=group_title, target_group_id=target_group_id)
-                return
-        except IndexError:
-            # Normal /start in private chat (Point 12 - do NOT show "Go in private chat")
-            bot.send_message(
-                chat_id, 
-                _(chat_id, 'start_private'), 
-                disable_web_page_preview=True
-            )
-            return
+                    # 1. जाँच करें कि यूज़र उस ग्रुप का क्रिएटर है या नहीं
+                    if not is_creator_member(target_group_id, user_id):
+                        bot.send_message(
+                            chat_id, 
+                            "❌ आप इस ग्रुप के क्रिएटर नहीं हैं, इसलिए सेटिंग्स को एक्सेस नहीं कर सकते।"
+                        )
+                        return
+                        
+                    # 2. Group info प्राप्त करें
+                    try:
+                        group_info = bot.get_chat(target_group_id)
+                        group_title = group_info.title
+                    except Exception:
+                        group_title = target_group_id
+                        
+                    # सीधे ग्रुप की main settings मेन्यू भेजें
+                    send_menu(chat_id, user_id, 'main', is_private=True, group_title=group_title, target_group_id=target_group_id)
+                    return
+        
+        except Exception:
+            # IndexError या अन्य त्रुटि, जिसका अर्थ है कि यह सामान्य /start है
+            pass 
+            
+        # B. Normal /start in private chat (Your requested UX)
+        
+        managed_groups = get_user_managed_groups(user_id)
+        keyboard = types.InlineKeyboardMarkup()
 
-    # 2. Group Chat Flow (or Supergroup)
+        # 1. Add Bot to Group Button
+        add_bot_url = f"https://t.me/{BOT_USERNAME}?startgroup=start"
+        keyboard.add(
+             types.InlineKeyboardButton("➕ Bot को ग्रुप में जोड़ें (Add to Group)", url=add_bot_url)
+        )
+        
+        menu_text = "👋 Bot में आपका स्वागत है!\n\nनीचे अपने ग्रुप को प्रबंधित करने या बॉट को नए ग्रुप में जोड़ने का विकल्प चुनें।"
+        
+        # 2. Managed Groups Buttons
+        if managed_groups:
+            keyboard.add(types.InlineKeyboardButton("➖", callback_data="ignore_label")) # Separator
+            keyboard.add(types.InlineKeyboardButton("⚙️ आपके प्रबंधित ग्रुप ⚙️", callback_data="ignore_label"))
+            for group in managed_groups:
+                # यह बटन deep-linking URL का उपयोग करता है: /start <group_id>
+                manage_link = f"https://t.me/{BOT_USERNAME}?start={group['id']}"
+                keyboard.add(
+                    types.InlineKeyboardButton(f"➡️ {group['title']}", url=manage_link)
+                )
+        else:
+             menu_text = menu_text + "\n\n**कोई प्रबंधित ग्रुप नहीं मिला।** Bot को अपने ग्रुप में जोड़ें और सुनिश्चित करें कि आप ग्रुप क्रिएटर हैं।"
+
+        bot.send_message(
+            chat_id, 
+            menu_text, 
+            disable_web_page_preview=True,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        return
+
+    # 2. Group Chat Flow (or Supergroup - logic remains same)
     if message.chat.type in ['group', 'supergroup']:
         chat_id_str = str(chat_id)
         
@@ -1299,8 +1383,6 @@ def handle_start_menu(message):
         # Check if the user running the command is the group creator (Point 13)
         is_creator = is_creator_member(chat_id, user_id)
         
-        # Initial message text
-        menu_text = _(chat_id_str, 'main_menu_desc')
         keyboard = types.InlineKeyboardMarkup()
         
         if not is_admin:
@@ -1341,6 +1423,7 @@ def handle_start_menu(message):
         else:
             # Regular admin/user in group: show a simple message that only the creator can access settings
             bot.reply_to(message, _(chat_id_str, 'admin_only'))
+
             
 # ---------- Callback Inline Handler (Point 3, 15, 16, 17) ----------
 @bot.callback_query_handler(func=lambda call: True)
