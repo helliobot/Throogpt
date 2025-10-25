@@ -403,8 +403,7 @@ def forward_log(chat_id, text):
         row = c.fetchone()
         conn.close()
         if row and row['forward_to']:
-            bot.send_message(row['forward_to'], f"📋 Log from {chat_id}:
-{text}")
+            bot.send_message(row['forward_to'], f"📋 Log from {chat_id}: {text}")
     except Exception as e:
         logging.warning(f"Forward log failed: {e}")
 
