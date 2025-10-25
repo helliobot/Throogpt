@@ -103,8 +103,7 @@ LANG = {
         'user_kicked': '👢 {user} kicked',
         'flood_detected': '⚠️ Stop spamming! ({count}/{limit})',
         'blacklist_violation': '❌ Blacklist word detected! Violation: {count}/3',
-        'captcha_verify': '🔐 Please solve captcha:
-{q1} + {q2} = ?',
+        'captcha_verify': '🔐 Please solve captcha:\n{q1} + {q2} = ?',
         'captcha_success': '✅ Captcha verified! Welcome {name}',
         'captcha_failed': '❌ Wrong captcha.',
         'welcome_message': '👋 Welcome {name}!',
